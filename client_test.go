@@ -11,16 +11,16 @@ import (
 // Utilities for testing
 // -----------------------------------------------------------------------------
 type callbackTranslator struct {
-	ReadCallback  func(io.Reader) (*Message, error)
-	WriteCallback func(io.Writer, *Message) error
+	ReadCallback  func() (*Message, error)
+	WriteCallback func(*Message) error
 }
 
-func (c *callbackTranslator) ReadFrom(r io.Reader) (*Message, error) {
-	return c.ReadCallback(r)
+func (c *callbackTranslator) ReadMessage() (*Message, error) {
+	return c.ReadCallback()
 }
 
-func (c *callbackTranslator) WriteTo(w io.Writer, m *Message) error {
-	return c.WriteCallback(w, m)
+func (c *callbackTranslator) WriteMessage(m *Message) error {
+	return c.WriteCallback(m)
 }
 
 type channelTranslator struct {
@@ -41,7 +41,7 @@ func (c *channelTranslator) Close() error {
 	return nil
 }
 
-func (c *channelTranslator) ReadFrom(io.Reader) (*Message, error) {
+func (c *channelTranslator) ReadMessage() (*Message, error) {
 	select {
 	case m := <-c.incoming:
 		return m, nil
@@ -50,7 +50,7 @@ func (c *channelTranslator) ReadFrom(io.Reader) (*Message, error) {
 	}
 }
 
-func (c *channelTranslator) WriteTo(_ io.Writer, m *Message) error {
+func (c *channelTranslator) WriteMessage(m *Message) error {
 	select {
 	case c.outgoing <- m:
 		return nil
@@ -91,16 +91,12 @@ func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
 	msg := []byte("Hello, World!")
 	numWriteCalls := 0
 	ct := callbackTranslator{
-		ReadCallback: func(r io.Reader) (*Message, error) {
+		ReadCallback: func() (*Message, error) {
 			t.Error("Read function was called.")
 			return nil, io.EOF
 		},
-		WriteCallback: func(w io.Writer, m *Message) error {
+		WriteCallback: func(m *Message) error {
 			numWriteCalls++
-			if w != rwc {
-				t.Error("Didn't get expected nopRWC instance")
-			}
-
 			if &m.Data[0] != &msg[0] {
 				t.Error("Didn't get expected message by reference.")
 			}
@@ -270,19 +266,13 @@ func TestClientSubmitsUnalteredUsernameAndPassword(t *testing.T) {
 	readCalled := false
 	writeCalled := false
 	ct := callbackTranslator{
-		ReadCallback: func(r io.Reader) (*Message, error) {
+		ReadCallback: func() (*Message, error) {
 			readCalled = true
-			if r != rwc {
-				t.Error("Didn't get expected nopRWC instance")
-			}
 			msg := &Message{Meta: MetaAuthOk}
 			return msg, nil
 		},
-		WriteCallback: func(w io.Writer, m *Message) error {
+		WriteCallback: func(m *Message) error {
 			writeCalled = true
-			if w != rwc {
-				t.Error("Didn't get expected nopRWC instance")
-			}
 			if m.Meta != MetaAuth {
 				t.Error("Auth message type wasn't MetaAuth")
 			}

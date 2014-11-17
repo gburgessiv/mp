@@ -90,6 +90,6 @@ type NewConnectionHandler interface {
 // in some format. Instances of MessageTranslator are not expected to be
 // used concurrently.
 type MessageTranslator interface {
-	ReadFrom(io.Reader) (*Message, error)
-	WriteTo(io.Writer, *Message) error
+	ReadMessage() (*Message, error)
+	WriteMessage(*Message) error
 }

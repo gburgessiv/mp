@@ -217,14 +217,14 @@ func (c *Client) sendMessage(m *Message) error {
 	c.serverWLock.Lock()
 	defer c.serverWLock.Unlock()
 
-	return c.translator.WriteTo(c.server, m)
+	return c.translator.WriteMessage(m)
 }
 
 func (c *Client) recvMessage() (*Message, error) {
 	c.serverRLock.Lock()
 	defer c.serverRLock.Unlock()
 
-	return c.translator.ReadFrom(c.server)
+	return c.translator.ReadMessage()
 }
 
 func (c *Client) Authenticate(password []byte) error {
