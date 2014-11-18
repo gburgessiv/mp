@@ -19,6 +19,7 @@ other. Connections are managed by _Clients_, who all talk to the _Server_, which
 is just a glorified router (with user authentication built in).
 
 Authentication to the server is super simple -- it looks something like this:
+
 1. Client sends name + secret (or username and password, if you'd prefer),
    to the Server
 2. If the Server likes this name + secret, it acknowledges that everything's
