@@ -1,7 +1,6 @@
 package mp
 
 import (
-	"encoding/gob"
 	"io"
 	"net"
 	"sync"
@@ -43,25 +42,6 @@ func (m *mockListener) Addr() net.Addr {
 	panic("Can't get addr for mock listener")
 }
 
-type gobTranslator struct {
-	dec *gob.Decoder
-	enc *gob.Encoder
-}
-
-func newGobTranslator(r io.Reader, w io.Writer) MessageTranslator {
-	return &gobTranslator{gob.NewDecoder(r), gob.NewEncoder(w)}
-}
-
-func (t *gobTranslator) ReadMessage() (*Message, error) {
-	msg := &Message{}
-	err := t.dec.Decode(msg)
-	return msg, err
-}
-
-func (t *gobTranslator) WriteMessage(m *Message) error {
-	return t.enc.Encode(m)
-}
-
 var _ net.Listener = (*mockListener)(nil)
 var _ MessageTranslator = (*gobTranslator)(nil)
 
@@ -71,7 +51,7 @@ func authAny(_ string, _ []byte) bool {
 
 func TestServerAuthsNewConnections(t *testing.T) {
 	listener := newMockListener()
-	serv := NewServer(authAny, newGobTranslator)
+	serv := NewServer(authAny, NewGobTranslator)
 	defer serv.Close()
 	go serv.Listen(listener)
 
@@ -79,7 +59,7 @@ func TestServerAuthsNewConnections(t *testing.T) {
 	defer ourPipe.Close()
 	listener.conns <- serverPipe
 
-	trans := newGobTranslator(ourPipe, ourPipe)
+	trans := NewGobTranslator(ourPipe, ourPipe)
 	msg := &Message{
 		Meta:        MetaAuth,
 		OtherClient: "my-name",
@@ -95,7 +75,7 @@ func TestServerAuthsNewConnections(t *testing.T) {
 
 func TestServerClosesOnNoAuth(t *testing.T) {
 	listener := newMockListener()
-	serv := NewServer(authAny, newGobTranslator)
+	serv := NewServer(authAny, NewGobTranslator)
 	defer serv.Close()
 	go serv.Listen(listener)
 
@@ -103,7 +83,7 @@ func TestServerClosesOnNoAuth(t *testing.T) {
 	defer ourPipe.Close()
 	listener.conns <- serverPipe
 
-	trans := newGobTranslator(ourPipe, ourPipe)
+	trans := NewGobTranslator(ourPipe, ourPipe)
 	msg := &Message{
 		Meta:        MetaNone,
 		OtherClient: "my-name",
@@ -120,7 +100,7 @@ func TestServerClosesOnNoAuth(t *testing.T) {
 func TestServerClosesOnRejectedAuth(t *testing.T) {
 	listener := newMockListener()
 	authNone := func(string, []byte) bool { return false }
-	serv := NewServer(authNone, newGobTranslator)
+	serv := NewServer(authNone, NewGobTranslator)
 	defer serv.Close()
 	go serv.Listen(listener)
 
@@ -128,7 +108,7 @@ func TestServerClosesOnRejectedAuth(t *testing.T) {
 	defer ourPipe.Close()
 	listener.conns <- serverPipe
 
-	trans := newGobTranslator(ourPipe, ourPipe)
+	trans := NewGobTranslator(ourPipe, ourPipe)
 	msg := &Message{
 		Meta:        MetaNone,
 		OtherClient: "my-name",
@@ -146,7 +126,7 @@ func makeAuthedServerClientPairs(clients ...string) (*Server, []MessageTranslato
 	listener := newMockListener()
 	defer listener.Close()
 
-	serv := NewServer(authAny, newGobTranslator)
+	serv := NewServer(authAny, NewGobTranslator)
 	go serv.Listen(listener)
 
 	translators := make([]MessageTranslator, len(clients))
@@ -155,7 +135,7 @@ func makeAuthedServerClientPairs(clients ...string) (*Server, []MessageTranslato
 		ourSide, serverSide := net.Pipe()
 		listener.conns <- serverSide
 
-		ourTrans := newGobTranslator(ourSide, ourSide)
+		ourTrans := NewGobTranslator(ourSide, ourSide)
 		translators[i] = ourTrans
 		conns[i] = ourSide
 

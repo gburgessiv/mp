@@ -16,7 +16,7 @@ func closeServerAndClients(s *Server, cs []*Client) {
 func serverWithClients(connh NewConnectionHandler, names ...string) (*Server, []*Client) {
 	listener := newMockListener()
 	clients := make([]*Client, len(names))
-	serv := NewServer(authAny, newGobTranslator)
+	serv := NewServer(authAny, NewGobTranslator)
 	defer listener.Close()
 	go serv.Listen(listener)
 
@@ -24,7 +24,7 @@ func serverWithClients(connh NewConnectionHandler, names ...string) (*Server, []
 		ours, theirs := net.Pipe()
 		listener.conns <- theirs
 
-		client := NewClient(n, ours, newGobTranslator, connh)
+		client := NewClient(n, ours, NewGobTranslator, connh)
 		clients[i] = client
 		err := client.Authenticate(nil)
 		if err != nil {
@@ -41,7 +41,7 @@ func serverWithClients(connh NewConnectionHandler, names ...string) (*Server, []
 	return serv, clients
 }
 
-func TestClientsConnectToServer(t *testing.T) {
+func TestClientsCanCommunicateThroughTheServer(t *testing.T) {
 	// This channel needs to be buffered so we're not
 	// blocking on ourself.
 	c2Chan := make(chan Connection, 1)
@@ -70,5 +70,25 @@ func TestClientsConnectToServer(t *testing.T) {
 
 	if string(msg) != "Hello, World!" {
 		t.Errorf("Unexpectedly got %s as the message", string(msg))
+	}
+}
+
+func TestNoSuchProtocolReportedProperly(t *testing.T) {
+	// This channel needs to be buffered so we're not
+	// blocking on ourself.
+  handlerCalled := false
+	handler := &callbackConnectionHandler{
+		Callback: func(s string, conn Connection) bool {
+      handlerCalled = false
+			return false
+		},
+	}
+
+	server, clients := serverWithClients(handler, "c1", "c2")
+	defer closeServerAndClients(server, clients)
+
+	_, err := clients[0].MakeConnection("c2", "foo")
+	if err == nil || err.Error() != ErrStringUnknownProtocol {
+		t.Fatal(err)
 	}
 }

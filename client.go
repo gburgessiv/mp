@@ -11,6 +11,8 @@ import (
 
 const (
 	max64BitNumberCharsHex = 16 // 8 bytes * 2 chars per byte
+
+  ErrStringUnknownProtocol = "Unknown Protocol"
 )
 
 type clientConnection struct {
@@ -357,7 +359,7 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 		c.waitingConnectionsLock.Unlock()
 
 		if ok {
-			msg.Data = []byte("Unknown protocol")
+			msg.Data = []byte(ErrStringUnknownProtocol)
 			conn.putNewMessage(msg)
 		}
 		return false, nil
