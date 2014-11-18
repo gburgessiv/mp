@@ -83,6 +83,12 @@ func (h *callbackConnectionHandler) IncomingConnection(s string, c Connection) b
 	return h.Callback(s, c)
 }
 
+func singletonTranslator(t MessageTranslator) TranslatorMaker {
+	return func(io.Reader, io.Writer) MessageTranslator {
+		return t
+	}
+}
+
 // -----------------------------------------------------------------------------
 // clientConnection testing
 // -----------------------------------------------------------------------------
@@ -104,7 +110,7 @@ func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
 		},
 	}
 
-	client := NewClient("test-client", rwc, &ct, nil)
+	client := NewClient("test-client", rwc, singletonTranslator(&ct), nil)
 	conn := newClientConnection("other-client", "connId", client)
 	n, err := conn.Write(msg)
 	if err != nil {
@@ -228,7 +234,7 @@ func TestClientConnectionWriteAndWriteMessageIncrementSeqNum(t *testing.T) {
 	rwc := &nopRWC{}
 	msg := []byte("Hello, World!")
 	ct := newChannelTranslator()
-	client := NewClient("test-client", rwc, ct, nil)
+	client := NewClient("test-client", rwc, singletonTranslator(ct), nil)
 	conn := newClientConnection("other-client", "connId", client)
 	go func() {
 		conn.WriteMessage(msg)
@@ -286,7 +292,7 @@ func TestClientSubmitsUnalteredUsernameAndPassword(t *testing.T) {
 		},
 	}
 
-	client := NewClient(clientName, rwc, &ct, nil)
+	client := NewClient(clientName, rwc, singletonTranslator(&ct), nil)
 	err := client.Authenticate(clientPass)
 	if err != nil {
 		t.Error("Got error authenticating:", err)
@@ -304,7 +310,7 @@ func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
 	clientName := "test-client"
 	ct := newChannelTranslator()
 
-	client := NewClient(clientName, rwc, ct, nil)
+	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.
@@ -355,7 +361,7 @@ func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
 	clientName := "test-client"
 	ct := newChannelTranslator()
 
-	client := NewClient(clientName, rwc, ct, nil)
+	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.
@@ -400,7 +406,7 @@ func TestClientSendsWatWhenSentAuthMessage(t *testing.T) {
 	clientName := "test-client"
 	ct := newChannelTranslator()
 
-	client := NewClient(clientName, rwc, ct, nil)
+	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.
@@ -447,7 +453,7 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 		},
 	}
 
-	client := NewClient(clientName, rwc, ct, ch)
+	client := NewClient(clientName, rwc, singletonTranslator(ct), ch)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.

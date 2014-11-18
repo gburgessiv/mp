@@ -2,6 +2,7 @@ package mp
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"sync"
@@ -140,10 +141,11 @@ func (c *clientConnection) nextSeqNum() uint64 {
 
 func (c *clientConnection) WriteMessage(b []byte) error {
 	msg := Message{
-		Meta:        MetaNone,
-		SeqNum:      c.nextSeqNum(),
-		OtherClient: c.otherClient,
-		Data:        b,
+		Meta:         MetaNone,
+		SeqNum:       c.nextSeqNum(),
+		OtherClient:  c.otherClient,
+		ConnectionId: c.connId,
+		Data:         b,
 	}
 
 	err := c.client.sendMessage(&msg)
@@ -193,7 +195,7 @@ type Client struct {
 func NewClient(
 	name string,
 	server io.ReadWriteCloser,
-	translator MessageTranslator,
+	translatorMaker TranslatorMaker,
 	connHandler NewConnectionHandler) *Client {
 
 	return &Client{
@@ -203,7 +205,7 @@ func NewClient(
 		serverWLock: sync.Mutex{},
 
 		newConnHandler: connHandler,
-		translator:     translator,
+		translator:     translatorMaker(server, server),
 
 		connections:     make(map[string]*clientConnection),
 		connectionsLock: sync.Mutex{},
@@ -252,6 +254,7 @@ func (c *Client) Authenticate(password []byte) error {
 		return errors.New(string(resp.Data))
 	}
 
+	c.authed = true
 	return nil
 }
 
@@ -301,7 +304,7 @@ func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
 	if err != nil {
 		return nil, err
 	} else if data != nil {
-		return nil, errors.New("Expected nil data ReadMessage()")
+		return nil, errors.New(string(data))
 	}
 	return conn, nil
 }
@@ -330,11 +333,36 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 	switch msg.Meta {
 	case MetaNone:
 		panic("Passed unmeta message to handleMetaMessage")
-	case MetaAuth, MetaAuthOk, MetaAuthFailure:
-		msg.Meta = MetaWAT
-		return true, nil
+	case MetaNoSuchConnection:
+		id := msg.ConnectionId
+		c.connectionsLock.Lock()
+		conn, ok := c.connections[id]
+		if ok {
+			delete(c.connections, id)
+		}
+		// Don't want to call Unlock after Close.
+		c.connectionsLock.Unlock()
+
+		if ok {
+			conn.Close()
+		}
+		return false, nil
+	case MetaUnknownProto:
+		cid := msg.ConnectionId
+		c.waitingConnectionsLock.Lock()
+		conn, ok := c.waitingConnections[cid]
+		if ok {
+			delete(c.waitingConnections, cid)
+		}
+		c.waitingConnectionsLock.Unlock()
+
+		if ok {
+			msg.Data = []byte("Unknown protocol")
+			conn.putNewMessage(msg)
+		}
+		return false, nil
 	case MetaConnSyn:
-		id := c.nextConnId()
+		id := msg.ConnectionId
 		conn := newClientConnection(msg.OtherClient, id, c)
 		proto := string(msgData)
 		ok := c.newConnHandler.IncomingConnection(proto, conn)
@@ -357,7 +385,6 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 			delete(c.waitingConnections, cid)
 		}
 		c.waitingConnectionsLock.Unlock()
-
 		if !ok {
 			msg.Meta = MetaNoSuchConnection
 			return true, nil
@@ -369,9 +396,17 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 
 		conn.putNewMessage(msg)
 		return false, nil
+	case MetaAuth, MetaAuthOk, MetaAuthFailure:
+		msg.Meta = MetaWAT
+		return true, nil
 	default:
-		return false, errors.New("Unknown meta message type passed into handleMetaMessage")
+		s := fmt.Sprintf("Unknown meta message type passed into handleMetaMessage: %d", msg.Meta)
+		return false, errors.New(s)
 	}
+}
+
+func (c *Client) Close() error {
+	return c.server.Close()
 }
 
 func (c *Client) Run() error {

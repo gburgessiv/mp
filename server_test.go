@@ -4,14 +4,14 @@ import (
 	"encoding/gob"
 	"io"
 	"net"
-  "sync"
+	"sync"
 	"testing"
 )
 
 type mockListener struct {
-	conns  chan net.Conn
-	closed bool
-  closeLock sync.Mutex
+	conns     chan net.Conn
+	closed    bool
+	closeLock sync.Mutex
 }
 
 func newMockListener() *mockListener {
@@ -28,9 +28,9 @@ func (m *mockListener) Accept() (net.Conn, error) {
 }
 
 func (m *mockListener) Close() error {
-  // Was warned about data races with m.closed. Decided to fix them forever.
-  m.closeLock.Lock()
-  defer m.closeLock.Unlock()
+	// Was warned about data races with m.closed. Decided to fix them forever.
+	m.closeLock.Lock()
+	defer m.closeLock.Unlock()
 
 	if !m.closed {
 		m.closed = true

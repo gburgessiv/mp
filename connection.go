@@ -10,12 +10,12 @@ const (
 	MetaNone = MetaType(iota)
 	MetaWAT  // Invalid/unknown meta type received
 	MetaNoSuchConnection
+	MetaUnknownProto
 	MetaConnSyn
 	MetaConnAck
 	MetaAuth
 	MetaAuthOk
 	MetaAuthFailure
-	MetaUnknownProto
 )
 
 type MessageFlags uint8
