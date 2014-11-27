@@ -18,6 +18,6 @@ func (m *MappedConnectionHandler) IncomingConnection(proto string, conn Connecti
   return true
 }
 
-func newMappedConnectionHandler() *MappedConnectionHandler {
+func NewMappedConnectionHandler() *MappedConnectionHandler {
   return &MappedConnectionHandler{make(map[string]func(Connection))}
 }
