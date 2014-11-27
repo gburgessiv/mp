@@ -12,7 +12,7 @@ import (
 const (
 	max64BitNumberCharsHex = 16 // 8 bytes * 2 chars per byte
 
-  ErrStringUnknownProtocol = "Unknown Protocol"
+	ErrStringUnknownProtocol = "Unknown Protocol"
 )
 
 type clientConnection struct {
@@ -118,9 +118,9 @@ func (c *clientConnection) Write(b []byte) (int, error) {
 }
 
 func (c *clientConnection) Close() error {
-  if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
-    close(c.closed)
-  }
+	if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
+		close(c.closed)
+	}
 	return nil
 }
 

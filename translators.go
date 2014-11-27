@@ -1,8 +1,8 @@
 package mp
 
 import (
-  "encoding/gob"
-  "io"
+	"encoding/gob"
+	"io"
 )
 
 // Translates messages using the built-in encoding/gob module

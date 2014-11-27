@@ -75,7 +75,7 @@ func (s *serverClient) Run() error {
 			if err != nil {
 				return err
 			}
-      continue
+			continue
 		}
 
 		msg.OtherClient = s.name

@@ -76,10 +76,10 @@ func TestClientsCanCommunicateThroughTheServer(t *testing.T) {
 func TestNoSuchProtocolReportedProperly(t *testing.T) {
 	// This channel needs to be buffered so we're not
 	// blocking on ourself.
-  handlerCalled := false
+	handlerCalled := false
 	handler := &callbackConnectionHandler{
 		Callback: func(s string, conn Connection) bool {
-      handlerCalled = false
+			handlerCalled = false
 			return false
 		},
 	}
