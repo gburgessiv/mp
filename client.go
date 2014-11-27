@@ -15,26 +15,9 @@ const (
   ErrStringUnknownProtocol = "Unknown Protocol"
 )
 
-// Simple atomic bool class.
-type atomicBool struct {
-  flag uint32
-}
-
-// Set/Clear use CAS because we generally care about who set the bool first. 
-// Correspondingly, these functions return whether or not the operation was 
-// successful. (Even were it to be "unsuccesful", the bool would still be
-// in the desired state until it's modified later)
-func (f *atomicBool) Set() bool {
-  return atomic.CompareAndSwapUint32(&f.flag, 0, 1)
-}
-
-func (f *atomicBool) Clear() bool {
-  return atomic.CompareAndSwapUint32(&f.flag, 1, 0)
-}
-
 type clientConnection struct {
 	closed   chan struct{}
-	isClosed atomicBool
+	isClosed uint32
 
 	messages       chan []byte
 	currentMessage []byte
@@ -135,7 +118,7 @@ func (c *clientConnection) Write(b []byte) (int, error) {
 }
 
 func (c *clientConnection) Close() error {
-  if c.isClosed.Set() {
+  if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
     close(c.closed)
   }
 	return nil
