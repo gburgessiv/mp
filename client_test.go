@@ -239,37 +239,6 @@ func TestClientConnectionReturnsOneMessagePerReadMessage(t *testing.T) {
 	}
 }
 
-func TestClientConnectionWriteAndWriteMessageIncrementSeqNum(t *testing.T) {
-	msg := []byte("Hello, World!")
-	ct := newChannelTranslator()
-	client := NewClient("test-client", &nopRWC{}, singletonTranslator(ct), nil)
-	conn := newClientConnection("other-client", "connId", client)
-	go func() {
-		conn.WriteMessage(msg)
-		conn.Write(msg)
-		conn.WriteMessage(msg)
-		conn.Write(msg)
-	}()
-
-	defer ct.Close()
-	msgA := <-ct.outgoing
-	msgB := <-ct.outgoing
-	msgC := <-ct.outgoing
-	msgD := <-ct.outgoing
-
-	if msgA.SeqNum+1 != msgB.SeqNum {
-		t.Error("Sequence numbers don't reliably increment by 1")
-	}
-
-	if msgB.SeqNum+1 != msgC.SeqNum {
-		t.Error("Sequence numbers don't reliably increment by 1")
-	}
-
-	if msgC.SeqNum+1 != msgD.SeqNum {
-		t.Error("Sequence numbers don't reliably increment by 1")
-	}
-}
-
 // -----------------------------------------------------------------------------
 // Client
 // -----------------------------------------------------------------------------

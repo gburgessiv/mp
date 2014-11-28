@@ -2,7 +2,6 @@ package mp
 
 import (
 	"bytes"
-	"math"
 	"net"
 	"reflect"
 	"testing"
@@ -20,8 +19,6 @@ func testTranslator(t *testing.T, maker TranslatorMaker) {
 	transB := maker(pipeB, pipeB)
 
 	metas := [...]MetaType{MetaNone, MetaAuthFailure}
-	flags := [...]MessageFlags{FlagNone, FlagNeedReadReceipt}
-	seqNums := [...]uint64{0, 1, 2, math.MaxUint64 - 1, math.MaxUint64}
 	otherClients := [...]string{"a", "åBc 1 2 3™"}
 	connIds := [...]string{"a:1", otherClients[1] + ":ffffffff"}
 	data := [...][]byte{[]byte("Hello, world!"), make([]byte, 1024)}
@@ -29,10 +26,7 @@ func testTranslator(t *testing.T, maker TranslatorMaker) {
 		data[1][i] = byte(i % 256)
 	}
 
-	// If we try all possible combinations of the above, then we have to deal
-	// with 2^5 * 5 = 160 combinations. I don't want to write 6 nested for loops
-	// or any gnarly reflection code. So I won't.
-	maxLength := len(seqNums)
+	maxLength := len(connIds)
 	datumCopy := make([]byte, 0, 1024*1024)
 	for i := 0; i < maxLength; i++ {
 		datum := data[i%len(data)]
@@ -40,8 +34,6 @@ func testTranslator(t *testing.T, maker TranslatorMaker) {
 		datumCopy = append(datumCopy[:0], datum...)
 		outgoingMessage := &Message{
 			Meta:         metas[i%len(metas)],
-			Flags:        flags[i%len(flags)],
-			SeqNum:       seqNums[i%len(seqNums)],
 			OtherClient:  otherClients[i%len(otherClients)],
 			ConnectionId: connIds[i%len(connIds)],
 			Data:         datumCopy,

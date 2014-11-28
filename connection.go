@@ -19,21 +19,12 @@ const (
 	MetaAuthFailure
 )
 
-type MessageFlags uint8
-
-const (
-	FlagNone            = MessageFlags(0)
-	FlagNeedReadReceipt = MessageFlags(1 << iota)
-)
-
 // The raw Message type. This and the above Meta types are fully exposed in
 // order to make rolling your own MessageTranslator/etc. as effortless as
 // possible. The Client/Server types generally shouldn't expose raw Message
 // instances directly to the user.
 type Message struct {
 	Meta         MetaType
-	Flags        MessageFlags
-	SeqNum       uint64
 	OtherClient  string
 	ConnectionId string
 	Data         []byte
@@ -73,9 +64,6 @@ type Connection interface {
 	WriteMessage([]byte) error
 
 	OtherClient() string
-
-	SetWaitForConfirm(bool)
-	WaitsForConfirm() bool
 }
 
 // TODO: This name sucks.

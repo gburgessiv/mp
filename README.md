@@ -68,17 +68,16 @@ Hopefully we'll have docs at some point. :)
 Immediate TODOs
 ---------------
 
-- "TCP" (i.e. WaitForConfirm on connections)
-- Notifications when the other side closes
 - Testing testing testing testing testing
 
 Future Plans
 ------------
 
-- Adding support for multiple message formats (protobuf, JSON)
+- Adding support for multiple message formats (JSON, Gob, Protobuf, etc.) 
+  talking to the same server at once.
 - Client implementations in other languages (Java, Python, JS, ...)
 
 I found a bug!
 --------------
 
-You mean you found my latest feature!
+You mean you found my latest feature! Bug reports/pull requests are welcome :)

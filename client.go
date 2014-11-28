@@ -10,8 +10,6 @@ import (
 )
 
 const (
-	max64BitNumberCharsHex = 16 // 8 bytes * 2 chars per byte
-
 	ErrStringUnknownProtocol = "Unknown Protocol"
 )
 
@@ -23,11 +21,9 @@ type clientConnection struct {
 	currentMessage []byte
 	readLock       sync.Mutex
 
-	seqNum         uint64
-	otherClient    string
-	connId         string
-	client         *Client
-	waitForConfirm bool
+	otherClient string
+	connId      string
+	client      *Client
 }
 
 var (
@@ -142,14 +138,9 @@ func (c *clientConnection) ReadMessage() ([]byte, error) {
 	return msg, nil
 }
 
-func (c *clientConnection) nextSeqNum() uint64 {
-	return atomic.AddUint64(&c.seqNum, 1)
-}
-
 func (c *clientConnection) WriteMessage(b []byte) error {
 	msg := Message{
 		Meta:         MetaNone,
-		SeqNum:       c.nextSeqNum(),
 		OtherClient:  c.otherClient,
 		ConnectionId: c.connId,
 		Data:         b,
@@ -160,24 +151,11 @@ func (c *clientConnection) WriteMessage(b []byte) error {
 		return err
 	}
 
-	if c.waitForConfirm {
-		// This is a somewhat heavy item. Will deal with it later.
-		panic("TODO")
-	}
-
 	return nil
 }
 
 func (c *clientConnection) OtherClient() string {
 	return c.otherClient
-}
-
-func (c *clientConnection) SetWaitForConfirm(w bool) {
-	c.waitForConfirm = true
-}
-
-func (c *clientConnection) WaitsForConfirm() bool {
-	return c.waitForConfirm
 }
 
 type Client struct {
