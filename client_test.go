@@ -574,3 +574,68 @@ func TestClientClosesConnectionIfOtherSideClosed(t *testing.T) {
 
 	ct.incoming <- closedMsg
 }
+
+func TestClientClosesConnectionIfOtherClientClosed(t *testing.T) {
+	const (
+		clientName  = "test-client"
+		otherClient = "other-client"
+	)
+	ct := newChannelTranslator()
+	var wg sync.WaitGroup
+	defer func() {
+		ct.Close()
+		wg.Wait()
+	}()
+
+	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), nil)
+	client.authed = true
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		err := client.Run()
+		if err != io.EOF {
+			t.Error("Client died with", err)
+		}
+	}()
+
+	// "Main" goroutine 1 -- half-establishes a connection
+	go func() {
+		defer wg.Done()
+		_, err := client.MakeConnection(otherClient, "half-open")
+		if err == nil {
+			t.Fatal("No error making a connection")
+		}
+	}()
+
+	// "Main" goroutine 2 -- fully establishes a connection
+	go func() {
+		defer wg.Done()
+		conn, err := client.MakeConnection(otherClient, "full-open")
+		if err != nil {
+			t.Fatal("Error making connection:", err)
+		}
+
+		_, err = conn.ReadMessage()
+		if err != io.EOF {
+			t.Error(err)
+		}
+	}()
+
+	for i := 0; i < 2; i++ {
+		syn := <-ct.outgoing
+		if string(syn.Data) != "full-open" {
+			continue
+		}
+
+		syn.Meta = MetaConnAck
+		ct.incoming <- syn
+	}
+
+	closedMsg := &Message{
+		Meta:        MetaClientClosed,
+		OtherClient: otherClient,
+	}
+
+	ct.incoming <- closedMsg
+}
