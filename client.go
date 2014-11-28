@@ -124,6 +124,17 @@ func (c *clientConnection) Close() error {
 	return nil
 }
 
+// Micro-optimization: Lots of times, the Client will call Close() on
+// connections after removing it from the Clients list. There's no point
+// in having Close() try to remove itself from a list it's already been removed
+// from, so we skip that step in this close.
+func (c *clientConnection) closeNoNotify() error {
+	if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
+		close(c.closed)
+	}
+	return nil
+}
+
 func (c *clientConnection) ReadMessage() ([]byte, error) {
 	c.readLock.Lock()
 	defer c.readLock.Unlock()
@@ -320,13 +331,17 @@ func (c *Client) removeConnection(id string) (*clientConnection, bool) {
 	return conn, ok
 }
 
+// This method is assumed to *only* be called by the goroutine that is
+// processing incoming messages. It is not safe to call concurrently. If you
+// want to do so, fix the parts annotated with !!! below.
+//
+// Note that this function has free reign to update msg however it sees fit.
+// Make a deep copy if you don't want it updated.
+//
 // return (bool, error) is admittedly a bit weird. We'll update
 // msg in-place with what we want to send back (if anything).
 // Returns (?, err) on an unrecoverable error, (true, nil) if we
 // want to respond, (false, nil) if we don't want to respond.
-//
-// Note that this function has free reign to update msg however it sees fit.
-// Make a deep copy if you don't want it updated.
 func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 	// In most cases, it's okay to bounce data back with our message, but it's
 	// also undesirable to do so. So we nil out msg.Data and keep a snapshot of
@@ -341,7 +356,7 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 		conn, ok := c.removeConnection(msg.ConnectionId)
 
 		if ok {
-			conn.Close()
+			conn.closeNoNotify()
 		}
 		return false, nil
 	case MetaUnknownProto:
@@ -356,7 +371,7 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 		if ok {
 			msg.Data = []byte(ErrStringUnknownProtocol)
 			conn.putNewMessage(msg)
-			conn.Close()
+			conn.closeNoNotify()
 		}
 		return false, nil
 	case MetaConnSyn:
@@ -394,6 +409,39 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 
 		conn.putNewMessage(msg)
 		return false, nil
+	case MetaClientClosed:
+		// !!! We can update connections/waitingConnections independently because
+		// we're the only goroutine to move Connections from the waiting state to
+		// the connected state. If this function is to be modified to be called
+		// from multiple goroutines at once (on the same Client at once), then we
+		// need to make sure there isn't a race in Ack where we take out of
+		// waitingConnections and put into connections
+
+		otherClient := msg.OtherClient
+		connections := c.connections
+		c.connectionsLock.Lock()
+		for k, conn := range connections {
+			if conn.OtherClient() == otherClient {
+				// If we want to change this to Close(), we need to move it out of this
+				// loop. Otherwise, we'll hit a deadlock when Close() is trying to
+				// notify the client of the closing (i.e. when it tries to acquire
+				// connectionsLock)
+				conn.closeNoNotify()
+				delete(connections, k)
+			}
+		}
+		c.connectionsLock.Unlock()
+
+		waitingConnections := c.waitingConnections
+		c.waitingConnectionsLock.Lock()
+		for k, conn := range waitingConnections {
+			if conn.OtherClient() == otherClient {
+				conn.closeNoNotify()
+				delete(waitingConnections, k)
+			}
+		}
+		c.waitingConnectionsLock.Unlock()
+		return false, nil
 	case MetaAuth, MetaAuthOk, MetaAuthFailure:
 		msg.Meta = MetaWAT
 		return true, nil
@@ -420,6 +468,7 @@ func (c *Client) Close() error {
 func (c *Client) notifyClosed(conn *clientConnection) error {
 	_, ok := c.removeConnection(conn.connId)
 	if !ok {
+		// TODO: If failed, this may be in the waitingConnections list
 		return nil
 	}
 

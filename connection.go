@@ -11,6 +11,7 @@ const (
 	MetaWAT  // Invalid/unknown meta type received
 	MetaNoSuchConnection
 	MetaUnknownProto
+	MetaClientClosed
 	MetaConnSyn
 	MetaConnAck
 	MetaConnClosed
