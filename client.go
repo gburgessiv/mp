@@ -14,8 +14,9 @@ const (
 )
 
 type clientConnection struct {
-	closed   chan struct{}
-	isClosed uint32
+	closed        chan struct{}
+	isClosed      uint32
+	isEstablished uint32
 
 	messages       chan []byte
 	currentMessage []byte
@@ -39,6 +40,14 @@ func newClientConnection(otherClient, connId string, client *Client) *clientConn
 		connId:      connId,
 		client:      client,
 	}
+}
+
+func (c *clientConnection) isHandshakeComplete() bool {
+	return atomic.LoadUint32(&c.isEstablished) != 0
+}
+
+func (c *clientConnection) noteHandshakeComplete() {
+	atomic.StoreUint32(&c.isEstablished, 1)
 }
 
 func (c *clientConnection) readIntoBuffer(blocking bool) error {
@@ -178,9 +187,8 @@ type Client struct {
 	newConnHandler NewConnectionHandler
 	translator     MessageTranslator
 
-	connections        map[string]*clientConnection
-	waitingConnections map[string]*clientConnection
-	connectionsLock    sync.Mutex
+	connections     map[string]*clientConnection
+	connectionsLock sync.Mutex
 
 	connNumber int64
 	authed     bool
@@ -201,9 +209,8 @@ func NewClient(
 		newConnHandler: connHandler,
 		translator:     translatorMaker(server, server),
 
-		connections:        make(map[string]*clientConnection),
-		waitingConnections: make(map[string]*clientConnection),
-		connectionsLock:    sync.Mutex{},
+		connections:     make(map[string]*clientConnection),
+		connectionsLock: sync.Mutex{},
 	}
 }
 
@@ -276,14 +283,11 @@ func (c *Client) nextConnId() string {
 }
 
 func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
-	// Can I just use the machinery for sending a message using a Connection,
-	// then wait until I either get an error or response?
-	// Yes pls.
 	id := c.nextConnId()
 	conn := newClientConnection(otherClient, id, c)
 
 	c.connectionsLock.Lock()
-	c.waitingConnections[id] = conn
+	c.connections[id] = conn
 	c.connectionsLock.Unlock()
 
 	msg := &Message{
@@ -298,8 +302,6 @@ func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
 		return nil, err
 	}
 
-	// When we get our initial message, that means our connection has been moved from
-	// c.waitingConnections to c.connections for us. Hooray.
 	data, err := conn.ReadMessage()
 	if err != nil {
 		return nil, err
@@ -309,45 +311,34 @@ func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
 	return conn, nil
 }
 
-func (c *Client) findConnection(id string) (*clientConnection, bool) {
+func (c *Client) findAnyConnection(id string) (*clientConnection, bool) {
 	c.connectionsLock.Lock()
 	a, b := c.connections[id]
 	c.connectionsLock.Unlock()
 	return a, b
 }
 
-func (c *Client) removeEstablishedConnection(id string) (*clientConnection, bool) {
+func (c *Client) findEstablishedConnection(id string) (*clientConnection, bool) {
+	a, ok := c.findAnyConnection(id)
+	if !ok || !a.isHandshakeComplete() {
+		return nil, false
+	}
+	return a, true
+}
+
+func (c *Client) findWaitingConnection(id string) (*clientConnection, bool) {
+	a, ok := c.findAnyConnection(id)
+	if !ok || a.isHandshakeComplete() {
+		return nil, false
+	}
+	return a, true
+}
+
+func (c *Client) removeConnection(id string) (*clientConnection, bool) {
 	c.connectionsLock.Lock()
 	conn, ok := c.connections[id]
 	if ok {
 		delete(c.connections, id)
-	}
-	c.connectionsLock.Unlock()
-
-	return conn, ok
-}
-
-func (c *Client) removeWaitingConnection(id string) (*clientConnection, bool) {
-	c.connectionsLock.Lock()
-	conn, ok := c.waitingConnections[id]
-	if ok {
-		delete(c.connections, id)
-	}
-	c.connectionsLock.Unlock()
-
-	return conn, ok
-}
-
-func (c *Client) removeEstablishedOrWaitingConnection(id string) (*clientConnection, bool) {
-	c.connectionsLock.Lock()
-	conn, ok := c.connections[id]
-	if ok {
-		delete(c.connections, id)
-	} else {
-		conn, ok = c.waitingConnections[id]
-		if ok {
-			delete(c.waitingConnections, id)
-		}
 	}
 	c.connectionsLock.Unlock()
 
@@ -376,23 +367,25 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 	case MetaNone:
 		panic("Passed unmeta message to handleMetaMessage")
 	case MetaNoSuchConnection, MetaConnClosed:
-		conn, ok := c.removeEstablishedOrWaitingConnection(msg.ConnectionId)
+		conn, ok := c.removeConnection(msg.ConnectionId)
 		if ok {
 			conn.closeNoNotify()
 		}
 		return false, nil
 	case MetaUnknownProto:
 		cid := msg.ConnectionId
-		c.connectionsLock.Lock()
-		conn, ok := c.waitingConnections[cid]
-		if ok {
-			delete(c.waitingConnections, cid)
-		}
-		c.connectionsLock.Unlock()
+		conn, ok := c.removeConnection(cid)
 
 		if ok {
-			msg.Data = []byte(ErrStringUnknownProtocol)
-			conn.putNewMessage(msg)
+			// !!! It's assumed that conn.isHandshakeComplete() will *not* change
+			// throughout the execution of this if statement. Otherwise, this msg
+			// will leak to the client.
+			// (It's also expected that we'll never get MetaUnknownProto if our
+			// handshake is complete, but the extra protection doesn't hurt)
+			if !conn.isHandshakeComplete() {
+				msg.Data = []byte(ErrStringUnknownProtocol)
+				conn.putNewMessage(msg)
+			}
 			conn.closeNoNotify()
 		}
 		return false, nil
@@ -410,40 +403,33 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 		c.connections[id] = conn
 		c.connectionsLock.Unlock()
 
+		conn.noteHandshakeComplete()
 		msg.Meta = MetaConnAck
 		return true, nil
 	case MetaConnAck:
-		cid := msg.ConnectionId
-		c.connectionsLock.Lock()
-		conn, ok := c.waitingConnections[cid]
-		if ok {
-			delete(c.waitingConnections, cid)
-			c.connections[cid] = conn
-		}
-		c.connectionsLock.Unlock()
+		id := msg.ConnectionId
+		conn, ok := c.findAnyConnection(id)
 
 		if !ok {
 			msg.Meta = MetaNoSuchConnection
 			return true, nil
 		}
 
+		conn.noteHandshakeComplete()
 		conn.putNewMessage(msg)
 		return false, nil
 	case MetaClientClosed:
 		otherClient := msg.OtherClient
 		connections := c.connections
 		c.connectionsLock.Lock()
-		connLists := [...]map[string]*clientConnection{c.connections, c.waitingConnections}
-		for _, list := range connLists {
-			for k, conn := range list {
-				if conn.OtherClient() == otherClient {
-					// If we want to change this to Close(), we need to move it out of this
-					// loop. Otherwise, we'll hit a deadlock when Close() is trying to
-					// notify the client of the closing (i.e. when it tries to acquire
-					// connectionsLock)
-					conn.closeNoNotify()
-					delete(connections, k)
-				}
+		for k, conn := range c.connections {
+			if conn.OtherClient() == otherClient {
+				// If we want to change this to Close(), we need to move it out of this
+				// loop. Otherwise, we'll hit a deadlock when Close() is trying to
+				// notify the client of the closing (i.e. when it tries to acquire
+				// connectionsLock)
+				conn.closeNoNotify()
+				delete(connections, k)
 			}
 		}
 		c.connectionsLock.Unlock()
@@ -472,7 +458,7 @@ func (c *Client) Close() error {
 // This may be a better design decision, so I'll swap to that in
 // the future.
 func (c *Client) notifyClosed(conn *clientConnection) error {
-	_, ok := c.removeEstablishedOrWaitingConnection(conn.connId)
+	_, ok := c.removeConnection(conn.connId)
 	if !ok {
 		return nil
 	}
@@ -499,7 +485,7 @@ func (c *Client) Run() error {
 		}
 
 		if msg.Meta == MetaNone {
-			conn, ok := c.findConnection(msg.ConnectionId)
+			conn, ok := c.findEstablishedConnection(msg.ConnectionId)
 			if !ok || !conn.putNewMessage(msg) {
 				msg.Data = nil
 				msg.Meta = MetaNoSuchConnection
