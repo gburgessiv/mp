@@ -13,6 +13,7 @@ const (
 	MetaUnknownProto
 	MetaConnSyn
 	MetaConnAck
+	MetaConnClosed
 	MetaAuth
 	MetaAuthOk
 	MetaAuthFailure

@@ -120,6 +120,10 @@ func (c *clientConnection) Write(b []byte) (int, error) {
 func (c *clientConnection) Close() error {
 	if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
 		close(c.closed)
+		// nil check because testing can nil out the client
+		if client := c.client; client != nil {
+			client.notifyClosed(c)
+		}
 	}
 	return nil
 }
@@ -226,6 +230,11 @@ func (c *Client) sendMessage(m *Message) error {
 }
 
 func (c *Client) recvMessage() (*Message, error) {
+	// Due to the design of Clients, recvMessage() should
+	// only be called from Run() and Authenticate(), so locks
+	// shouldn't be needed. However, because this code is in flux,
+	// I'd rather not have races should the design change.
+	// TODO: Potentially remove this.
 	c.serverRLock.Lock()
 	defer c.serverRLock.Unlock()
 
@@ -268,10 +277,13 @@ func (c *Client) addConnection(conn *clientConnection) {
 }
 
 func (c *Client) nextConnId() string {
-	// In most cases there's no point in making garbage here.
 	nextInt := atomic.AddInt64(&c.connNumber, 1)
+
+	// In personal use, I've never seen a connId exceed 64 bytes,
+	// so there's no point in making extra garbage if it can be
+	// (easily) avoided.
 	var microoptimization [64]byte
-	buf := microoptimization[:]
+	buf := microoptimization[:0]
 	buf = append(buf, c.name...)
 	buf = append(buf, ':')
 	buf = strconv.AppendInt(buf, nextInt, 16)
@@ -319,6 +331,17 @@ func (c *Client) findConnection(id string) (*clientConnection, bool) {
 	return a, b
 }
 
+func (c *Client) removeConnection(id string) (*clientConnection, bool) {
+	c.connectionsLock.Lock()
+	conn, ok := c.connections[id]
+	if ok {
+		delete(c.connections, id)
+	}
+	c.connectionsLock.Unlock()
+
+	return conn, ok
+}
+
 // return (bool, error) is admittedly a bit weird. We'll update
 // msg in-place with what we want to send back (if anything).
 // Returns (?, err) on an unrecoverable error, (true, nil) if we
@@ -336,15 +359,8 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 	switch msg.Meta {
 	case MetaNone:
 		panic("Passed unmeta message to handleMetaMessage")
-	case MetaNoSuchConnection:
-		id := msg.ConnectionId
-		c.connectionsLock.Lock()
-		conn, ok := c.connections[id]
-		if ok {
-			delete(c.connections, id)
-		}
-		// Don't want to call Unlock after Close.
-		c.connectionsLock.Unlock()
+	case MetaNoSuchConnection, MetaConnClosed:
+		conn, ok := c.removeConnection(msg.ConnectionId)
 
 		if ok {
 			conn.Close()
@@ -362,6 +378,7 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 		if ok {
 			msg.Data = []byte(ErrStringUnknownProtocol)
 			conn.putNewMessage(msg)
+			conn.Close()
 		}
 		return false, nil
 	case MetaConnSyn:
@@ -410,6 +427,31 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 
 func (c *Client) Close() error {
 	return c.server.Close()
+}
+
+// TODO: This is kind of an ugly hack, and can result
+// in deadlock if we aren't careful, so we should probably
+// try to send out the closedMsg in Run(). However, I don't
+// see how to do that without making Run() more event-loopy
+// (i.e. have it fire off a goroutine that hands us messages
+// on a chan *Message, then have it select on that and channels
+// for whatever else needs to be done).
+//
+// This may be a better design decision, so I'll swap to that in
+// the future.
+func (c *Client) notifyClosed(conn *clientConnection) error {
+	_, ok := c.removeConnection(conn.connId)
+	if !ok {
+		return nil
+	}
+
+	closedMsg := &Message{
+		Meta:         MetaConnClosed,
+		OtherClient:  conn.otherClient,
+		ConnectionId: conn.connId,
+	}
+
+	return c.sendMessage(closedMsg)
 }
 
 func (c *Client) Run() error {

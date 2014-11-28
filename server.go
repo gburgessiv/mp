@@ -90,6 +90,8 @@ func (s *serverClient) Run() error {
 	}
 }
 
+// TODO: Ban clients with ':' in their names, because that's used
+// as the seperator for session names
 func (s *serverClient) AuthenticateAndRun() error {
 	defer s.Close()
 
@@ -186,6 +188,9 @@ func (s *Server) Close() {
 
 func (s *Server) Listen(l net.Listener) error {
 	s.listener = l
+
+	// Close the listener, not the server. The server can operate perfectly fine
+	// without the ability to accept new clients
 	defer l.Close()
 
 	for {
