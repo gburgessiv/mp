@@ -4,12 +4,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 )
 
-const (
-	ProtoMaxSize = 32
-)
+func isClientNameValid(name string) bool {
+	return !strings.ContainsRune(name, ':')
+}
 
 type serverClient struct {
 	conn       io.ReadWriteCloser
@@ -90,8 +91,6 @@ func (s *serverClient) Run() error {
 	}
 }
 
-// TODO: Ban clients with ':' in their names, because that's used
-// as the seperator for session names
 func (s *serverClient) AuthenticateAndRun() error {
 	defer s.Close()
 
@@ -99,6 +98,11 @@ func (s *serverClient) AuthenticateAndRun() error {
 	if err != nil {
 		s.conn.Close()
 		return err
+	}
+
+	if !isClientNameValid(name) {
+		s.conn.Close()
+		return errors.New("Client name contained invalid characters")
 	}
 
 	s.name = name

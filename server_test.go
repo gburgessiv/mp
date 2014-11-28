@@ -53,12 +53,13 @@ func TestServerAuthsNewConnections(t *testing.T) {
 	listener := newMockListener()
 	serv := NewServer(authAny, NewGobTranslator)
 	defer serv.Close()
+
 	go serv.Listen(listener)
 
 	ourPipe, serverPipe := net.Pipe()
 	defer ourPipe.Close()
-	listener.conns <- serverPipe
 
+	listener.conns <- serverPipe
 	trans := NewGobTranslator(ourPipe, ourPipe)
 	msg := &Message{
 		Meta:        MetaAuth,

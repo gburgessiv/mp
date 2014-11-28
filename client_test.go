@@ -103,7 +103,6 @@ func singletonTranslator(t MessageTranslator) TranslatorMaker {
 // clientConnection testing
 // -----------------------------------------------------------------------------
 func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
-	rwc := &nopRWC{}
 	msg := []byte("Hello, World!")
 	numWriteCalls := 0
 	ct := callbackTranslator{
@@ -120,7 +119,7 @@ func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
 		},
 	}
 
-	client := NewClient("test-client", rwc, singletonTranslator(&ct), nil)
+	client := NewClient("test-client", &nopRWC{}, singletonTranslator(&ct), nil)
 	conn := newClientConnection("other-client", "connId", client)
 	n, err := conn.Write(msg)
 	if err != nil {
@@ -241,10 +240,9 @@ func TestClientConnectionReturnsOneMessagePerReadMessage(t *testing.T) {
 }
 
 func TestClientConnectionWriteAndWriteMessageIncrementSeqNum(t *testing.T) {
-	rwc := &nopRWC{}
 	msg := []byte("Hello, World!")
 	ct := newChannelTranslator()
-	client := NewClient("test-client", rwc, singletonTranslator(ct), nil)
+	client := NewClient("test-client", &nopRWC{}, singletonTranslator(ct), nil)
 	conn := newClientConnection("other-client", "connId", client)
 	go func() {
 		conn.WriteMessage(msg)
@@ -276,8 +274,7 @@ func TestClientConnectionWriteAndWriteMessageIncrementSeqNum(t *testing.T) {
 // Client
 // -----------------------------------------------------------------------------
 func TestClientSubmitsUnalteredUsernameAndPassword(t *testing.T) {
-	rwc := &nopRWC{}
-	clientName := "test-client"
+	const clientName = "test-client"
 	clientPass := []byte("test-password")
 	readCalled := false
 	writeCalled := false
@@ -302,7 +299,7 @@ func TestClientSubmitsUnalteredUsernameAndPassword(t *testing.T) {
 		},
 	}
 
-	client := NewClient(clientName, rwc, singletonTranslator(&ct), nil)
+	client := NewClient(clientName, &nopRWC{}, singletonTranslator(&ct), nil)
 	err := client.Authenticate(clientPass)
 	if err != nil {
 		t.Error("Got error authenticating:", err)
@@ -314,17 +311,23 @@ func TestClientSubmitsUnalteredUsernameAndPassword(t *testing.T) {
 }
 
 func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
-	rwc := &nopRWC{}
-	otherClient := "other-client"
-	proto := "proto1"
-	clientName := "test-client"
+	const (
+		otherClient = "other-client"
+		clientName  = "test-client"
+		proto       = "proto1"
+	)
+	var wg sync.WaitGroup
 	ct := newChannelTranslator()
 
-	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
+	defer func() {
+		ct.Close()
+		wg.Wait()
+	}()
+
+	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), nil)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.
-	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		err := client.Run()
@@ -342,11 +345,6 @@ func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
 			t.Fatal(err)
 		}
 		wg.Done()
-	}()
-
-	defer func() {
-		ct.Close()
-		wg.Wait()
 	}()
 
 	msg := <-ct.outgoing
@@ -367,8 +365,8 @@ func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
 }
 
 func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
+	const clientName = "test-client"
 	rwc := &nopRWC{}
-	clientName := "test-client"
 	ct := newChannelTranslator()
 
 	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
@@ -412,15 +410,19 @@ func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
 }
 
 func TestClientSendsWatWhenSentAuthMessage(t *testing.T) {
-	rwc := &nopRWC{}
-	clientName := "test-client"
+	const clientName = "test-client"
+	var wg sync.WaitGroup
 	ct := newChannelTranslator()
 
-	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
+	defer func() {
+		ct.Close()
+		wg.Wait()
+	}()
+
+	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), nil)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.
-	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		err := client.Run()
@@ -428,11 +430,6 @@ func TestClientSendsWatWhenSentAuthMessage(t *testing.T) {
 			t.Error("Client died with", err)
 		}
 		wg.Done()
-	}()
-
-	defer func() {
-		ct.Close()
-		wg.Wait()
 	}()
 
 	msg := &Message{
@@ -453,11 +450,10 @@ func TestClientSendsWatWhenSentAuthMessage(t *testing.T) {
 }
 
 func TestClientObeysSynHandlerDecisions(t *testing.T) {
-	rwc := &nopRWC{}
-	clientName := "test-client"
-	inputProto := "input-proto"
-	ct := newChannelTranslator()
-	defer ct.Close()
+	const (
+		clientName = "test-client"
+		inputProto = "input-proto"
+	)
 
 	ch := &callbackConnectionHandler{
 		Callback: func(proto string, _ Connection) bool {
@@ -465,7 +461,10 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 		},
 	}
 
-	client := NewClient(clientName, rwc, singletonTranslator(ct), ch)
+	ct := newChannelTranslator()
+	defer ct.Close()
+
+	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), ch)
 	client.authed = true
 
 	// I want the goroutines to exit cleanly before the test ends.

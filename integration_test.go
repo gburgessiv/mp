@@ -15,9 +15,10 @@ func closeServerAndClients(s *Server, cs []*Client) {
 
 func serverWithClients(connh NewConnectionHandler, names ...string) (*Server, []*Client) {
 	listener := newMockListener()
+	defer listener.Close()
+
 	clients := make([]*Client, len(names))
 	serv := NewServer(authAny, NewGobTranslator)
-	defer listener.Close()
 	go serv.Listen(listener)
 
 	for i, n := range names {
@@ -42,6 +43,7 @@ func serverWithClients(connh NewConnectionHandler, names ...string) (*Server, []
 }
 
 func TestClientsCanCommunicateThroughTheServer(t *testing.T) {
+	const sendMsg = "Hello, World!"
 	// This channel needs to be buffered so we're not
 	// blocking on ourself.
 	c2Chan := make(chan Connection, 1)
@@ -62,13 +64,13 @@ func TestClientsCanCommunicateThroughTheServer(t *testing.T) {
 
 	conn2 := <-c2Chan
 
-	conn.Write([]byte("Hello, World!"))
+	conn.Write([]byte(sendMsg))
 	msg, err := conn2.ReadMessage()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(msg) != "Hello, World!" {
+	if string(msg) != sendMsg {
 		t.Errorf("Unexpectedly got %s as the message", string(msg))
 	}
 }
