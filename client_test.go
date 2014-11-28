@@ -29,6 +29,16 @@ type channelTranslator struct {
 }
 
 func newChannelTranslator() *channelTranslator {
+	// Incoming can't be buffered because race -- take the following
+	// code:
+	//   ct := newChannelTranslator()
+	//   go readFromCTIncoming(ct)
+	//   ct.incoming <- nil
+	//   ct.Close()
+	//
+	// ...If ct.incoming doesn't block before nil is passed off, then
+	// it's unspecified whether or not the nil will ever be received.
+	// (In my implementation of Go [v1.3], nil is never received).
 	return &channelTranslator{
 		incoming: make(chan *Message),
 		outgoing: make(chan *Message),
@@ -447,6 +457,8 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 	clientName := "test-client"
 	inputProto := "input-proto"
 	ct := newChannelTranslator()
+	defer ct.Close()
+
 	ch := &callbackConnectionHandler{
 		Callback: func(proto string, _ Connection) bool {
 			return proto == inputProto
@@ -489,4 +501,108 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 	if ack.Meta != MetaUnknownProto {
 		t.Error("Meta is wrong:", ack.Meta)
 	}
+}
+
+func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
+	rwc := &nopRWC{}
+	clientName := "test-client"
+	inputProto := "input-proto"
+	ct := newChannelTranslator()
+	defer ct.Close()
+
+	var clientConn Connection
+	ch := &callbackConnectionHandler{
+		Callback: func(_ string, c Connection) bool {
+			clientConn = c
+			return true
+		},
+	}
+
+	client := NewClient(clientName, rwc, singletonTranslator(ct), ch)
+	client.authed = true
+
+	// I want the goroutines to exit cleanly before the test ends.
+	go func() {
+		err := client.Run()
+		if err != io.EOF {
+			t.Error("Client died with", err)
+		}
+	}()
+
+	msg := &Message{
+		Meta:         MetaConnSyn,
+		ConnectionId: "test-connid",
+		OtherClient:  "other",
+		Data:         []byte(inputProto),
+	}
+
+	ct.incoming <- msg
+	ack := <-ct.outgoing
+	if ack.Meta != MetaConnAck {
+		t.Error("Meta is wrong:", ack.Meta)
+	}
+
+	// clientConn should now be set. We run this in a goroutine because
+	// sendMessage() is done synchronously, and channelTranslator is
+	// synchronous.
+	go clientConn.Close()
+
+	out := <-ct.outgoing
+	if out.Meta != MetaConnClosed {
+		t.Error("Meta is wrong:", ack.Meta)
+	}
+}
+
+func TestClientClosesConnectionIfOtherSideClosed(t *testing.T) {
+	rwc := &nopRWC{}
+	clientName := "test-client"
+	inputProto := "input-proto"
+	otherClient := "other-client"
+	ct := newChannelTranslator()
+	var wg sync.WaitGroup
+	defer func() {
+		ct.Close()
+		wg.Wait()
+	}()
+
+	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
+	client.authed = true
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		err := client.Run()
+		if err != io.EOF {
+			t.Error("Client died with", err)
+		}
+	}()
+
+	// "Main" goroutine. I'm just juggling messages and things in the
+	// test after this runs
+	go func() {
+		defer wg.Done()
+		conn, err := client.MakeConnection(otherClient, inputProto)
+		if err != nil {
+			t.Fatal("Error making connection:", err)
+		}
+
+		_, err = conn.ReadMessage()
+		if err != io.EOF {
+			t.Error(err)
+		}
+	}()
+
+	syn := <-ct.outgoing
+	connId := syn.ConnectionId
+
+	syn.Meta = MetaConnAck
+	ct.incoming <- syn
+
+	closedMsg := &Message{
+		Meta:         MetaConnClosed,
+		ConnectionId: connId,
+		OtherClient:  otherClient,
+	}
+
+	ct.incoming <- closedMsg
 }
