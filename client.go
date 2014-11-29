@@ -11,6 +11,7 @@ import (
 
 const (
 	ErrStringUnknownProtocol = "Unknown Protocol"
+	ErrStringMultipleAuths   = "Client has already authenticated"
 )
 
 type clientConnection struct {
@@ -235,7 +236,7 @@ func (c *Client) recvMessage() (*Message, error) {
 
 func (c *Client) Authenticate(password []byte) error {
 	if c.authed {
-		return errors.New("Multiple authentications requested")
+		return errors.New(ErrStringMultipleAuths)
 	}
 
 	msg := Message{
@@ -260,12 +261,6 @@ func (c *Client) Authenticate(password []byte) error {
 
 	c.authed = true
 	return nil
-}
-
-func (c *Client) addConnection(conn *clientConnection) {
-	c.connectionsLock.Lock()
-	c.connections[conn.connId] = conn
-	c.connectionsLock.Unlock()
 }
 
 func (c *Client) nextConnId() string {
@@ -321,14 +316,6 @@ func (c *Client) findAnyConnection(id string) (*clientConnection, bool) {
 func (c *Client) findEstablishedConnection(id string) (*clientConnection, bool) {
 	a, ok := c.findAnyConnection(id)
 	if !ok || !a.isHandshakeComplete() {
-		return nil, false
-	}
-	return a, true
-}
-
-func (c *Client) findWaitingConnection(id string) (*clientConnection, bool) {
-	a, ok := c.findAnyConnection(id)
-	if !ok || a.isHandshakeComplete() {
 		return nil, false
 	}
 	return a, true

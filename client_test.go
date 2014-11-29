@@ -552,3 +552,62 @@ func TestClientClosesConnectionIfOtherClientClosed(t *testing.T) {
 
 	ct.incoming <- closedMsg
 }
+
+func TestClientAuthFailsGracefullyOnCommunicationErrors(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	// Reauth
+	client0, _, _, shutdown := makeAuthedClient(t, nil)
+	err := client0.Authenticate([]byte("Nope.jpg"))
+	if err.Error() != ErrStringMultipleAuths {
+		t.Error("Expected multiple auths error, got", err)
+	}
+	shutdown()
+
+	// Close before send
+	ct1 := newChannelTranslator()
+	client1 := NewClient("client-name", &nopRWC{}, singletonTranslator(ct1), nil)
+
+	ct1.Close()
+	go func() {
+		defer wg.Done()
+		err := client1.Authenticate(nil)
+		if err != io.EOF {
+			t.Error("Expected io.EOF from Authenticate, but got", err)
+		}
+	}()
+
+	// Close before recv
+	ct2 := newChannelTranslator()
+	client2 := NewClient("client-name", &nopRWC{}, singletonTranslator(ct2), nil)
+	go func() {
+		defer wg.Done()
+		err := client2.Authenticate(nil)
+		if err != io.EOF {
+			t.Error("Expected io.EOF from Authenticate, but got", err)
+		}
+	}()
+
+	<-ct2.outgoing
+	ct2.Close()
+
+	// Send back not-MetaAuthOk
+	const ErrorText = "Oh noes!"
+	ct3 := newChannelTranslator()
+	client3 := NewClient("client-name", &nopRWC{}, singletonTranslator(ct3), nil)
+	go func() {
+		defer wg.Done()
+		err := client3.Authenticate(nil)
+		if err.Error() != ErrorText {
+			t.Error("Expected", ErrorText, "from Authenticate, but got", err)
+		}
+	}()
+
+	in := <-ct3.outgoing
+	in.Meta = MetaAuthFailure
+	in.Data = []byte(ErrorText)
+	ct3.incoming <- in
+
+	wg.Wait()
+}

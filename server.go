@@ -272,10 +272,6 @@ func (s *Server) snapshotClients() []*serverClient {
 // Additionally, if the server has been closed, then the message will just be
 // dropped, because there are no clients to send to.
 func (s *Server) broadcastMessage(m *Message) {
-	if s.closed {
-		return
-	}
-
 	clients := s.snapshotClients()
 	for _, c := range clients {
 		c.WriteMessage(m)

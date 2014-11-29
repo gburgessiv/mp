@@ -167,9 +167,19 @@ func makeAuthedServerClientPairs(clients ...string) (*Server, []MessageTranslato
 	return serv, translators, conns
 }
 
+func shutdownAuthedServerClientPairs(s *Server, cs []net.Conn) {
+	if s != nil {
+		s.Close()
+	}
+
+	for _, c := range cs {
+		c.Close()
+	}
+}
+
 func TestServerRoutesMessagesCorrectly(t *testing.T) {
-	serv, trans, _ := makeAuthedServerClientPairs("c1", "c2", "c3")
-	defer serv.Close()
+	serv, trans, conns := makeAuthedServerClientPairs("c1", "c2", "c3")
+	defer shutdownAuthedServerClientPairs(serv, conns)
 
 	m1to3 := &Message{
 		Meta:        MetaNone,
