@@ -8,8 +8,13 @@ import (
 	"sync"
 )
 
+const (
+	ErrStringAuthDenied = "Authentication didn't recognize name+secret pair"
+	ErrStringBadName    = "Client name is invalid"
+)
+
 func isClientNameValid(name string) bool {
-	return !strings.ContainsRune(name, ':')
+	return len(name) > 0 && !strings.ContainsRune(name, ':')
 }
 
 type serverClient struct {
@@ -40,10 +45,15 @@ func (s *serverClient) Authenticate() (name string, err error) {
 	}
 
 	name = msg.OtherClient
+	if !isClientNameValid(name) {
+		err = errors.New(ErrStringBadName)
+		return
+	}
+
 	secret := msg.Data
 	ok := s.server.auth(name, secret)
 	if !ok {
-		err = errors.New("Authentication didn't recognize name+secret pair")
+		err = errors.New(ErrStringAuthDenied)
 		return
 	}
 
@@ -70,18 +80,15 @@ func (s *serverClient) Run() error {
 		}
 
 		other, ok := server.findClient(msg.OtherClient)
-		if !ok {
-			msg.Meta = MetaNoSuchConnection
-			err = s.translator.WriteMessage(msg)
-			if err != nil {
-				return err
-			}
-			continue
+		if ok {
+			msg.OtherClient = s.name
+			err = other.WriteMessage(msg)
+			ok = err == nil
 		}
 
-		msg.OtherClient = s.name
-		err = other.WriteMessage(msg)
-		if err != nil {
+		// Please note that `ok` is set above. I just didn't want to duplicate
+		// error handling code.
+		if !ok {
 			msg.Meta = MetaNoSuchConnection
 			err = s.translator.WriteMessage(msg)
 			if err != nil {
@@ -98,11 +105,6 @@ func (s *serverClient) AuthenticateAndRun() error {
 	if err != nil {
 		s.conn.Close()
 		return err
-	}
-
-	if !isClientNameValid(name) {
-		s.conn.Close()
-		return errors.New("Client name contained invalid characters")
 	}
 
 	s.name = name

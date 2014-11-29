@@ -37,3 +37,22 @@ func TestServerBroadcastsToClientsWhenOneClientCloses(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestServerClientReportsNoConnectionOnInvalidTarget(t *testing.T) {
+	serv, trans, conns := makeAuthedServerClientPairs("c1", "c2", "c3")
+	defer shutdownAuthedServerClientPairs(serv, conns)
+
+	msg := &Message{
+		OtherClient: "DNE",
+	}
+
+	trans[0].WriteMessage(msg)
+	msg, err := trans[0].ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if msg.Meta != MetaNoSuchConnection {
+		t.Error("Expected no such connection complaint.")
+	}
+}

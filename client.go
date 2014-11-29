@@ -12,6 +12,7 @@ import (
 const (
 	ErrStringUnknownProtocol = "Unknown Protocol"
 	ErrStringMultipleAuths   = "Client has already authenticated"
+	ErrStringNotYetAuthed    = "Client not yet authenticated"
 )
 
 type clientConnection struct {
@@ -479,7 +480,7 @@ func (c *Client) notifyClosed(conn *clientConnection) error {
 
 func (c *Client) Run() error {
 	if !c.authed {
-		return errors.New("Need to authenticate before running the client")
+		return errors.New(ErrStringNotYetAuthed)
 	}
 
 	defer c.server.Close()

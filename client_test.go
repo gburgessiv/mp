@@ -741,3 +741,11 @@ func TestClientMakeConnectionFailsGracefullyOnWriteFailure(t *testing.T) {
 
 	ct.Close()
 }
+
+func TestClientComplainsIfRunWithoutAuthenticating(t *testing.T) {
+	client := NewClient("basically-nil", nil, singletonTranslator(nil), nil)
+	err := client.Run()
+	if err.Error() != ErrStringNotYetAuthed {
+		t.Error("Expected not yet authed error message, got", err)
+	}
+}

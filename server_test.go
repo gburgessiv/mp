@@ -53,6 +53,67 @@ func authAny(_ string, _ []byte) bool {
 }
 
 // -----------------------------------------------------------------------------
+// serverClient tests
+// -----------------------------------------------------------------------------
+func TestServerClientAuthenticateFailsGracefullyOnEOF(t *testing.T) {
+	ct := newChannelTranslator()
+	ct.Close()
+
+	sc := newUnauthedServerClient(&nopRWC{}, nil, ct)
+	_, err := sc.Authenticate()
+	if err != io.EOF {
+		t.Error("Expected EOF, got", err)
+	}
+}
+
+func authNone(string, []byte) bool {
+	return false
+}
+
+func TestServerClientAuthenticateFailsBadNamesEarly(t *testing.T) {
+	ct := newChannelTranslator()
+	server := NewServer(authAny, singletonTranslator(ct))
+	badNames := [...]string{"", "hello:world"}
+	sc := newUnauthedServerClient(&nopRWC{}, server, ct)
+	for _, name := range badNames {
+		go func() {
+			authMsg := &Message{
+				Meta:        MetaAuth,
+				OtherClient: name,
+			}
+			ct.incoming <- authMsg
+		}()
+
+		_, err := sc.Authenticate()
+		if err == nil {
+			t.Errorf("For %s, Expected an error, but got nil?", name)
+		} else if err.Error() != ErrStringBadName {
+			t.Errorf("For %s, expected bad name error, but got %v", name, err)
+		}
+	}
+}
+
+func TestServerClientAuthenticateFailsIfAuthDisallowed(t *testing.T) {
+	server := NewServer(authNone, nil)
+	ct := newChannelTranslator()
+	defer ct.Close()
+
+	go func() {
+		authMsg := &Message{
+			Meta:        MetaAuth,
+			OtherClient: "hi",
+		}
+		ct.incoming <- authMsg
+	}()
+
+	sc := newUnauthedServerClient(&nopRWC{}, server, ct)
+	_, err := sc.Authenticate()
+	if err.Error() != ErrStringAuthDenied {
+		t.Error("Expected auth denied error, but got", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Server tests
 // -----------------------------------------------------------------------------
 func TestServerAuthsNewConnections(t *testing.T) {
