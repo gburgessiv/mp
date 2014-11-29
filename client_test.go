@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -26,6 +27,7 @@ func (c *callbackTranslator) WriteMessage(m *Message) error {
 type channelTranslator struct {
 	incoming, outgoing chan *Message
 	closed             chan struct{}
+	isClosed           uint32
 }
 
 func newChannelTranslator() *channelTranslator {
@@ -47,7 +49,9 @@ func newChannelTranslator() *channelTranslator {
 }
 
 func (c *channelTranslator) Close() error {
-	close(c.closed)
+	if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
+		close(c.closed)
+	}
 	return nil
 }
 
@@ -141,6 +145,14 @@ func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
 	}
 }
 
+// No, I'm not kidding.
+func TestClientConnectionOtherClientWorks(t *testing.T) {
+	conn := newClientConnection("foo", "id", nil)
+	if conn.OtherClient() != "foo" {
+		t.Error("How did it return", conn.OtherClient())
+	}
+}
+
 func TestClientConnectionIgnoresNilMessagesInRead(t *testing.T) {
 	conn := newClientConnection("other-client", "connId", nil)
 	msg1 := []byte("Hello")
@@ -190,24 +202,23 @@ func TestClientConnectionSpreadsBigMessagesAcrossManyReads(t *testing.T) {
 	}()
 
 	buf := make([]byte, 0, len(msg1))
-	readBuf := make([]byte, 2)
+	var readBuf [2]byte
 	nReads := 0
-
 	for {
-		n, err := conn.Read(readBuf)
+		n, err := conn.Read(readBuf[:])
+		buf = append(buf, readBuf[:n]...)
+		nReads++
+
 		if err == io.EOF {
 			break
 		} else if err != nil {
 			t.Fatal("Error reading:", err)
 		}
-
-		buf = append(buf, readBuf[:n]...)
-		nReads++
 	}
 
 	expNReads := len(msg1)/2 + len(msg1)%2
 	if nReads != expNReads {
-		t.Error("Expected", expNReads, "but got", nReads)
+		t.Error("Expected", expNReads, "reads but got", nReads)
 	}
 
 	if !bytes.Equal(msg1, buf) {
@@ -238,6 +249,81 @@ func TestClientConnectionReturnsOneMessagePerReadMessage(t *testing.T) {
 		}
 		if !bytes.Equal(rmsg, m) {
 			t.Errorf("%d message (%s) != expected (%s)", i, string(rmsg), string(m))
+		}
+	}
+}
+
+func mockBoundClientConnection() (*channelTranslator, *clientConnection) {
+	ct := newChannelTranslator()
+	client := NewClient("client-connection-client", &nopRWC{}, singletonTranslator(ct), nil)
+	conn := newClientConnection("client-connection", "test-id", client)
+	return ct, conn
+}
+
+func TestClientConnectionHandlesWriteMessageFailureGracefully(t *testing.T) {
+	ct, conn := mockBoundClientConnection()
+
+	ct.Close()
+	err := conn.WriteMessage([]byte("Hi!"))
+	if err != io.EOF {
+		t.Error("Expected EOF, got", err)
+	}
+
+	_, err = conn.Write([]byte("Hi!"))
+	if err != io.EOF {
+		t.Error("Expected EOF, got", err)
+	}
+}
+
+func TestClientConnectionHandlesReadMessageFailureGracefully(t *testing.T) {
+	conn := newClientConnection("client-connection", "test-id", nil)
+	conn.Close()
+	_, err := conn.ReadMessage()
+	if err != io.EOF {
+		t.Error("Expected EOF, got", err)
+	}
+
+	var bs [1]byte
+	_, err = conn.Read(bs[:])
+	if err != io.EOF {
+		t.Error("Expected EOF, got", err)
+	}
+}
+
+func TestClientConnectionReadReportsProperAmount(t *testing.T) {
+	const InputBufferLen = 3
+	conn := newClientConnection("client-connection", "test-id", nil)
+	defer conn.Close()
+
+	// Conveniently InputBufferLen+1 and InputBufferLen*2, respectively
+	messages := [...]string{"Hi!!", "Hello!"}
+
+	for _, message := range messages {
+		msg := &Message{Data: []byte(message)}
+		go conn.putNewMessage(msg)
+
+		var inBuf [InputBufferLen]byte
+		n, err := conn.Read(inBuf[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if n != len(inBuf) {
+			t.Error("Got less bytes than expected.")
+		} else if exp := msg.Data[:n]; !bytes.Equal(inBuf[:], exp) {
+			t.Error("Data wasn't what eas expected. Got", inBuf, "-- expected", exp)
+		}
+
+		remData := msg.Data[n:]
+		n, err = conn.Read(inBuf[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if n != len(remData) {
+			t.Errorf("Got %d bytes, expected %d.", n, len(remData))
+		} else if got := inBuf[:n]; !bytes.Equal(remData, got) {
+			t.Errorf("Got bytes %v, expected %v", got, remData)
 		}
 	}
 }
@@ -314,18 +400,18 @@ func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
 		proto       = "proto1"
 	)
 
-	client, ct, wg, shutdown := makeAuthedClient(t, nil)
+	client, ct, _, shutdown := makeAuthedClient(t, nil)
 	defer shutdown()
 
-	wg.Add(1)
 	// Main test routine routes messages, so we leave making the connection to
 	// other goroutines
+	connectionMade := make(chan struct{})
 	go func() {
-		defer wg.Done()
 		_, err := client.MakeConnection(otherClient, proto)
 		if err != nil {
 			t.Fatal(err)
 		}
+		close(connectionMade)
 	}()
 
 	msg := <-ct.outgoing
@@ -343,6 +429,7 @@ func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
 
 	msg.Meta = MetaConnAck
 	ct.incoming <- msg
+	<-connectionMade
 }
 
 func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
@@ -610,4 +697,47 @@ func TestClientAuthFailsGracefullyOnCommunicationErrors(t *testing.T) {
 	ct3.incoming <- in
 
 	wg.Wait()
+}
+
+func TestClientCloseClosesAllConnections(t *testing.T) {
+	client, ct, _, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
+
+	var conn Connection
+	connMade := make(chan struct{})
+	go func() {
+		defer close(connMade)
+		var err error
+		conn, err = client.MakeConnection("test-other-client", "test-proto")
+		if err != nil {
+			t.Fatal("Expected connection to be made, but got", err)
+		}
+	}()
+
+	syn := <-ct.outgoing
+	syn.Meta = MetaConnAck
+	ct.incoming <- syn
+
+	<-connMade
+	client.Close()
+	_, err := conn.ReadMessage()
+	if err != io.EOF {
+		t.Error("Expected EOF, but got", err)
+	}
+}
+
+func TestClientMakeConnectionFailsGracefullyOnWriteFailure(t *testing.T) {
+	client, ct, wg, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := client.MakeConnection("test-other-client", "test-proto")
+		if err != io.EOF {
+			t.Fatal("Expected io.EOF, got", err)
+		}
+	}()
+
+	ct.Close()
 }

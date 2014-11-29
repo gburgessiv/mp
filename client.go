@@ -94,7 +94,7 @@ func (c *clientConnection) Read(b []byte) (int, error) {
 
 	n := 0
 	remSlice := b
-	for n == 0 && len(remSlice) > 0 {
+	for len(remSlice) > 0 {
 		block := n == 0
 		err := c.readIntoBuffer(block)
 		if err == errWouldBlock {
@@ -105,6 +105,7 @@ func (c *clientConnection) Read(b []byte) (int, error) {
 
 		x := copy(remSlice, c.currentMessage)
 		if len(c.currentMessage) == x {
+			// Release the message instead of letting it linger as a 0 size slice.
 			c.currentMessage = nil
 		} else {
 			c.currentMessage = c.currentMessage[x:]
@@ -138,6 +139,12 @@ func (c *clientConnection) Close() error {
 // connections after removing it from the Clients list. There's no point
 // in having Close() try to remove itself from a list it's already been removed
 // from, so we skip that step in this close.
+//
+// Note: it should not be *assumed* that if this is called, the client will
+// not be notified by a different goroutine -- there's still a chance that
+// another goroutine will concurrently call Close() before this can be called.
+// The only thing this saves us from is notifying the Client *in the current
+// goroutine*.
 func (c *clientConnection) closeNoNotify() error {
 	if atomic.CompareAndSwapUint32(&c.isClosed, 0, 1) {
 		close(c.closed)
@@ -431,7 +438,18 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 }
 
 func (c *Client) Close() error {
-	return c.server.Close()
+	err := c.server.Close()
+
+	c.connectionsLock.Lock()
+	connections := c.connections
+	c.connections = make(map[string]*clientConnection)
+	c.connectionsLock.Unlock()
+
+	for _, conn := range connections {
+		conn.closeNoNotify()
+	}
+
+	return err
 }
 
 // TODO: This is kind of an ugly hack, and can result
