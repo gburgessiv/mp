@@ -235,10 +235,6 @@ func (s *Server) removeClientFromClosingMap(c *serverClient) {
 }
 
 func (s *Server) removeClientAndNotify(c *serverClient) {
-	if s.closed {
-		return
-	}
-
 	_, ok := s.queueClientForClose(c)
 	if !ok {
 		return
