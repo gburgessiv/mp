@@ -102,6 +102,9 @@ func singletonTranslator(t MessageTranslator) TranslatorMaker {
 // -----------------------------------------------------------------------------
 // clientConnection testing
 // -----------------------------------------------------------------------------
+
+var _ Connection = (*clientConnection)(nil)
+
 func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
 	msg := []byte("Hello, World!")
 	numWriteCalls := 0
@@ -279,41 +282,50 @@ func TestClientSubmitsUnalteredUsernameAndPassword(t *testing.T) {
 	}
 }
 
-func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
-	const (
-		otherClient = "other-client"
-		clientName  = "test-client"
-		proto       = "proto1"
-	)
-	var wg sync.WaitGroup
+func makeAuthedClient(
+	t *testing.T,
+	handler NewConnectionHandler,
+) (*Client, *channelTranslator, *sync.WaitGroup, func()) {
+
+	wg := new(sync.WaitGroup)
 	ct := newChannelTranslator()
-
-	defer func() {
-		ct.Close()
-		wg.Wait()
-	}()
-
-	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), nil)
+	client := NewClient("client-name", &nopRWC{}, singletonTranslator(ct), handler)
 	client.authed = true
 
-	// I want the goroutines to exit cleanly before the test ends.
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		err := client.Run()
 		if err != io.EOF {
 			t.Error("Client died with", err)
 		}
-		wg.Done()
 	}()
 
+	return client, ct, wg, func() {
+		ct.Close()
+		client.Close()
+		wg.Wait()
+	}
+}
+
+func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
+	const (
+		otherClient = "other-client"
+		proto       = "proto1"
+	)
+
+	client, ct, wg, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
+
+	wg.Add(1)
 	// Main test routine routes messages, so we leave making the connection to
 	// other goroutines
 	go func() {
+		defer wg.Done()
 		_, err := client.MakeConnection(otherClient, proto)
 		if err != nil {
 			t.Fatal(err)
 		}
-		wg.Done()
 	}()
 
 	msg := <-ct.outgoing
@@ -334,28 +346,8 @@ func TestClientSendsSynAckOnNewConnectionRequest(t *testing.T) {
 }
 
 func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
-	const clientName = "test-client"
-	rwc := &nopRWC{}
-	ct := newChannelTranslator()
-
-	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
-	client.authed = true
-
-	// I want the goroutines to exit cleanly before the test ends.
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		err := client.Run()
-		if err != io.EOF {
-			t.Error("Client died with", err)
-		}
-		wg.Done()
-	}()
-
-	defer func() {
-		ct.Close()
-		wg.Wait()
-	}()
+	_, ct, _, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
 
 	msg := &Message{
 		Meta:         MetaConnAck,
@@ -379,27 +371,8 @@ func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
 }
 
 func TestClientSendsWatWhenSentAuthMessage(t *testing.T) {
-	const clientName = "test-client"
-	var wg sync.WaitGroup
-	ct := newChannelTranslator()
-
-	defer func() {
-		ct.Close()
-		wg.Wait()
-	}()
-
-	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), nil)
-	client.authed = true
-
-	// I want the goroutines to exit cleanly before the test ends.
-	wg.Add(1)
-	go func() {
-		err := client.Run()
-		if err != io.EOF {
-			t.Error("Client died with", err)
-		}
-		wg.Done()
-	}()
+	_, ct, _, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
 
 	msg := &Message{
 		ConnectionId: "does-not-exist",
@@ -430,22 +403,8 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 		},
 	}
 
-	ct := newChannelTranslator()
-	defer ct.Close()
-
-	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), ch)
-	client.authed = true
-
-	// I want the goroutines to exit cleanly before the test ends.
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		err := client.Run()
-		if err != io.EOF {
-			t.Error("Client died with", err)
-		}
-		wg.Done()
-	}()
+	_, ct, _, shutdown := makeAuthedClient(t, ch)
+	defer shutdown()
 
 	msg := &Message{
 		Meta:         MetaConnSyn,
@@ -472,12 +431,6 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 }
 
 func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
-	rwc := &nopRWC{}
-	clientName := "test-client"
-	inputProto := "input-proto"
-	ct := newChannelTranslator()
-	defer ct.Close()
-
 	var clientConn Connection
 	ch := &callbackConnectionHandler{
 		Callback: func(_ string, c Connection) bool {
@@ -486,22 +439,14 @@ func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
 		},
 	}
 
-	client := NewClient(clientName, rwc, singletonTranslator(ct), ch)
-	client.authed = true
-
-	// I want the goroutines to exit cleanly before the test ends.
-	go func() {
-		err := client.Run()
-		if err != io.EOF {
-			t.Error("Client died with", err)
-		}
-	}()
+	_, ct, _, shutdown := makeAuthedClient(t, ch)
+	defer shutdown()
 
 	msg := &Message{
 		Meta:         MetaConnSyn,
 		ConnectionId: "test-connid",
 		OtherClient:  "other",
-		Data:         []byte(inputProto),
+		Data:         []byte("test-proto"),
 	}
 
 	ct.incoming <- msg
@@ -522,34 +467,16 @@ func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
 }
 
 func TestClientClosesConnectionIfOtherSideClosed(t *testing.T) {
-	rwc := &nopRWC{}
-	clientName := "test-client"
-	inputProto := "input-proto"
-	otherClient := "other-client"
-	ct := newChannelTranslator()
-	var wg sync.WaitGroup
-	defer func() {
-		ct.Close()
-		wg.Wait()
-	}()
+	const otherClient = "test-other-client"
+	client, ct, wg, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
 
-	client := NewClient(clientName, rwc, singletonTranslator(ct), nil)
-	client.authed = true
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		err := client.Run()
-		if err != io.EOF {
-			t.Error("Client died with", err)
-		}
-	}()
-
+	wg.Add(1)
 	// "Main" goroutine. I'm just juggling messages and things in the
 	// test after this runs
 	go func() {
 		defer wg.Done()
-		conn, err := client.MakeConnection(otherClient, inputProto)
+		conn, err := client.MakeConnection(otherClient, "test-proto")
 		if err != nil {
 			t.Fatal("Error making connection:", err)
 		}
@@ -580,25 +507,11 @@ func TestClientClosesConnectionIfOtherClientClosed(t *testing.T) {
 		clientName  = "test-client"
 		otherClient = "other-client"
 	)
-	ct := newChannelTranslator()
-	var wg sync.WaitGroup
-	defer func() {
-		ct.Close()
-		wg.Wait()
-	}()
 
-	client := NewClient(clientName, &nopRWC{}, singletonTranslator(ct), nil)
-	client.authed = true
+	client, ct, wg, shutdown := makeAuthedClient(t, nil)
+	defer shutdown()
 
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		err := client.Run()
-		if err != io.EOF {
-			t.Error("Client died with", err)
-		}
-	}()
-
+	wg.Add(2)
 	// "Main" goroutine 1 -- half-establishes a connection
 	go func() {
 		defer wg.Done()

@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// -----------------------------------------------------------------------------
+// Utilities for testing
+// -----------------------------------------------------------------------------
 type mockListener struct {
 	conns     chan net.Conn
 	closed    bool
@@ -49,6 +52,9 @@ func authAny(_ string, _ []byte) bool {
 	return true
 }
 
+// -----------------------------------------------------------------------------
+// Server tests
+// -----------------------------------------------------------------------------
 func TestServerAuthsNewConnections(t *testing.T) {
 	listener := newMockListener()
 	serv := NewServer(authAny, NewGobTranslator)

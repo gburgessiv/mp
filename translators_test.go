@@ -66,6 +66,9 @@ func testTranslator(t *testing.T, maker TranslatorMaker) {
 	}
 }
 
+var _ MessageTranslator = (*gobTranslator)(nil)
+var _ MessageTranslator = (*jsonTranslator)(nil)
+
 // I wanted different test methods for each translator, but they all
 // do literally the same thing, but with a different translator.
 
