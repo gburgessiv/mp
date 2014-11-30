@@ -3,7 +3,9 @@ MessagePasser
 
 MessagePasser is an implementation of a cross-machine messaging protocol. 
 Currently, it's in its super-early stages of development, so not much 
-exists (sans a Client+Server implementation in Go).
+exists (sans a Client+Server implementation in Go). At the time of writing,
+it's version 0.01a. I'm using it a bit "in production", but it's still
+very much in development, and the user-facing API isn't set in stone yet.
 
 Overview
 --------
@@ -68,13 +70,14 @@ Hopefully we'll have docs at some point. :)
 Immediate TODOs
 ---------------
 
+- Finish up docs
+- Adding support for multiple message formats (JSON, Gob, Protobuf, etc.) 
+  talking to the same server at once.
 - Testing testing testing testing testing
 
 Future Plans
 ------------
 
-- Adding support for multiple message formats (JSON, Gob, Protobuf, etc.) 
-  talking to the same server at once.
 - Client implementations in other languages (Java, Python, JS, ...)
 
 I found a bug!
