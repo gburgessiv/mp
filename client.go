@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	errStringUnknownProtocol = "Unknown Protocol"
-	errStringMultipleAuths   = "Client has already authenticated"
-	errStringNotYetAuthed    = "Client not yet authenticated"
+	errStringUnknownProtocol = "unknown protocol"
+	errStringMultipleAuths   = "client has already authenticated"
+	errStringNotYetAuthed    = "client not yet authenticated"
 )
 
 type clientConnection struct {
@@ -30,7 +30,7 @@ type clientConnection struct {
 }
 
 var (
-	errWouldBlock = errors.New("Would block")
+	errWouldBlock = errors.New("would block")
 )
 
 func newClientConnection(otherClient, connID string, client *Client) *clientConnection {

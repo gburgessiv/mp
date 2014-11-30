@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	errStringAuthDenied = "Authentication didn't recognize name+secret pair"
-	errStringBadName    = "Client name is invalid"
+	errStringAuthDenied = "authentication didn't recognize name+secret pair"
+	errStringBadName    = "client name is invalid"
 )
 
 func isClientNameValid(name string) bool {
@@ -41,7 +41,7 @@ func (s *serverClient) Authenticate() (name string, err error) {
 	}
 
 	if msg.Meta != MetaAuth {
-		err = errors.New("Expected MetaAuth as first message")
+		err = errors.New("expected MetaAuth as first message")
 		return
 	}
 
@@ -111,7 +111,7 @@ func (s *serverClient) AuthenticateAndRun() error {
 	s.name = name
 	if !s.server.addClient(s) {
 		s.conn.Close()
-		return errors.New("Error adding new client")
+		return errors.New("error adding new client")
 	}
 
 	err = s.WriteMessage(&Message{

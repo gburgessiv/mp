@@ -65,7 +65,11 @@ Points of note for connections:
   to write to get an "unreachable" notification -- this will be fixed very soon.
 - Read/Write are synonymous (sans signatures) to ReadMessage/WriteMessage.
 
-Hopefully we'll have docs at some point. :)
+Docs
+----
+
+[![GoDoc](https://godoc.org/github.com/dyreshark/mp?status.svg)](https://godoc.org/github.com/dyreshark/mp)
+
 
 Immediate TODOs
 ---------------
