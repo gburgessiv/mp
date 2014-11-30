@@ -6,7 +6,14 @@ import (
 
 func TestMappedConnectionHandlerFunctionsWithNoMappings(t *testing.T) {
 	ch := NewMappedConnectionHandler()
-	ok := ch.IncomingConnection("does-not-exist", nil)
+
+	ok := false
+	accept := func() Connection {
+		ok = true
+		return nil
+	}
+
+	ch.IncomingConnection("does-not-exist", accept)
 	if ok {
 		t.Fatal("???")
 	}
@@ -23,7 +30,13 @@ func TestMappedConnectionHandlerRunsInGoroutines(t *testing.T) {
 		outgoing <- 2
 	})
 
-	ok := ch.IncomingConnection("proto", nil)
+	ok := false
+	accept := func() Connection {
+		ok = true
+		return nil
+	}
+
+	ch.IncomingConnection("proto", accept)
 	if !ok {
 		t.Fatal("Incoming connection failed")
 	}
@@ -37,13 +50,21 @@ func TestMappedConnectionHandlerRunsInGoroutines(t *testing.T) {
 func TestMappedConnectionHandlerReturnsExpected(t *testing.T) {
 	ch := NewMappedConnectionHandler()
 	ch.AddMapping("exists", func(Connection) {})
-	ok := ch.IncomingConnection("exists", nil)
+
+	ok := false
+	accept := func() Connection {
+		ok = true
+		return nil
+	}
+
+	ch.IncomingConnection("DNE", accept)
+	if ok {
+		t.Error("Expected IncomingConnection to not exist")
+	}
+
+	ch.IncomingConnection("exists", accept)
 	if !ok {
 		t.Error("Expected IncomingConnection to exist")
 	}
 
-	ok = ch.IncomingConnection("DNE", nil)
-	if ok {
-		t.Error("Expected IncomingConnection to not exist")
-	}
 }

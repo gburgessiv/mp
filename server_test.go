@@ -87,7 +87,7 @@ func TestServerClientAuthenticateFailsBadNamesEarly(t *testing.T) {
 		_, err := sc.Authenticate()
 		if err == nil {
 			t.Errorf("For %s, Expected an error, but got nil?", name)
-		} else if err.Error() != ErrStringBadName {
+		} else if err.Error() != errStringBadName {
 			t.Errorf("For %s, expected bad name error, but got %v", name, err)
 		}
 	}
@@ -108,7 +108,7 @@ func TestServerClientAuthenticateFailsIfAuthDisallowed(t *testing.T) {
 
 	sc := newUnauthedServerClient(&nopRWC{}, server, ct)
 	_, err := sc.Authenticate()
-	if err.Error() != ErrStringAuthDenied {
+	if err.Error() != errStringAuthDenied {
 		t.Error("Expected auth denied error, but got", err)
 	}
 }

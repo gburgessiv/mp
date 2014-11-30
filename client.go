@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	ErrStringUnknownProtocol = "Unknown Protocol"
-	ErrStringMultipleAuths   = "Client has already authenticated"
-	ErrStringNotYetAuthed    = "Client not yet authenticated"
+	errStringUnknownProtocol = "Unknown Protocol"
+	errStringMultipleAuths   = "Client has already authenticated"
+	errStringNotYetAuthed    = "Client not yet authenticated"
 )
 
 type clientConnection struct {
@@ -25,7 +25,7 @@ type clientConnection struct {
 	readLock       sync.Mutex
 
 	otherClient string
-	connId      string
+	connID      string
 	client      *Client
 }
 
@@ -33,13 +33,13 @@ var (
 	errWouldBlock = errors.New("Would block")
 )
 
-func newClientConnection(otherClient, connId string, client *Client) *clientConnection {
+func newClientConnection(otherClient, connID string, client *Client) *clientConnection {
 	return &clientConnection{
 		// messages needs to remain unbuffered because of how our closed channel works.
 		messages:    make(chan []byte),
 		closed:      make(chan struct{}),
 		otherClient: otherClient,
-		connId:      connId,
+		connID:      connID,
 		client:      client,
 	}
 }
@@ -171,7 +171,7 @@ func (c *clientConnection) WriteMessage(b []byte) error {
 	msg := Message{
 		Meta:         MetaNone,
 		OtherClient:  c.otherClient,
-		ConnectionId: c.connId,
+		ConnectionID: c.connID,
 		Data:         b,
 	}
 
@@ -187,6 +187,8 @@ func (c *clientConnection) OtherClient() string {
 	return c.otherClient
 }
 
+// Client is the entity used to connect to Servers. Using a Client, you can
+// send/receive new Connection requests.
 type Client struct {
 	name        string
 	server      io.ReadWriteCloser
@@ -203,11 +205,13 @@ type Client struct {
 	authed     bool
 }
 
+// NewClient creates a new Client instance with the given name + server
+// communications
 func NewClient(
 	name string,
 	server io.ReadWriteCloser,
-	translatorMaker TranslatorMaker,
-	connHandler NewConnectionHandler) *Client {
+	tm TranslatorMaker,
+	ch NewConnectionHandler) *Client {
 
 	return &Client{
 		name:        name,
@@ -215,8 +219,8 @@ func NewClient(
 		serverRLock: sync.Mutex{},
 		serverWLock: sync.Mutex{},
 
-		newConnHandler: connHandler,
-		translator:     translatorMaker(server, server),
+		newConnHandler: ch,
+		translator:     tm(server, server),
 
 		connections:     make(map[string]*clientConnection),
 		connectionsLock: sync.Mutex{},
@@ -242,9 +246,12 @@ func (c *Client) recvMessage() (*Message, error) {
 	return c.translator.ReadMessage()
 }
 
+// Authenticate allows the client to perform its initial handshake and
+// authenticate itself with a Server. This should be called before
+// Client.Run().
 func (c *Client) Authenticate(password []byte) error {
 	if c.authed {
-		return errors.New(ErrStringMultipleAuths)
+		return errors.New(errStringMultipleAuths)
 	}
 
 	msg := Message{
@@ -271,10 +278,10 @@ func (c *Client) Authenticate(password []byte) error {
 	return nil
 }
 
-func (c *Client) nextConnId() string {
+func (c *Client) nextConnID() string {
 	nextInt := atomic.AddInt64(&c.connNumber, 1)
 
-	// In personal use, I've never seen a connId exceed 64 bytes,
+	// In personal use, I've never seen a connID exceed 64 bytes,
 	// so there's no point in making extra garbage if it can be
 	// (easily) avoided.
 	var microoptimization [64]byte
@@ -285,8 +292,18 @@ func (c *Client) nextConnId() string {
 	return string(buf)
 }
 
+// MakeConnection attempts to make a Connection with `otherClient` using the
+// `proto` protocol. On success, you'll get a shiny new Connection instance
+// and nil error. If anything goes wrong, you'll get an error.
+//
+// The Client will need to be authenticated and running when you call
+// MakeConnection().
 func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
-	id := c.nextConnId()
+	if !c.authed {
+		return nil, errors.New(errStringNotYetAuthed)
+	}
+
+	id := c.nextConnID()
 	conn := newClientConnection(otherClient, id, c)
 
 	c.connectionsLock.Lock()
@@ -296,7 +313,7 @@ func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
 	msg := &Message{
 		Meta:         MetaConnSyn,
 		OtherClient:  otherClient,
-		ConnectionId: id,
+		ConnectionID: id,
 		Data:         []byte(proto),
 	}
 
@@ -340,6 +357,48 @@ func (c *Client) removeConnection(id string) (*clientConnection, bool) {
 	return conn, ok
 }
 
+// This was lifted out of handleMetaMessage because of its complexity
+func (c *Client) metaHandleSyn(msg *Message, proto string) (resp bool, err error) {
+	var conn *clientConnection
+	var acceptCalled, callFinished bool
+
+	accept := func() Connection {
+		if callFinished {
+			panic("You need to call accept() before IncomingConnection() returns")
+		}
+		if acceptCalled {
+			panic("You may only call accept once.")
+		}
+
+		acceptCalled = true
+		conn = newClientConnection(msg.OtherClient, msg.ConnectionID, c)
+
+		// The whole reason that the complexity of having an accept() function
+		// exists is so that we can guarantee that we send the ACK out before
+		// the user gets their hands on the Connection object.
+		c.connectionsLock.Lock()
+		c.connections[msg.ConnectionID] = conn
+		c.connectionsLock.Unlock()
+
+		msg.Meta = MetaConnAck
+		// Explicitly ignore errors sending the ACK because if there's a problem,
+		// then this client will have to be shut down soon anyway, which will
+		// cause the Connection we're returning to die.
+		_ = c.sendMessage(msg)
+
+		conn.noteHandshakeComplete()
+		return conn
+	}
+
+	c.newConnHandler.IncomingConnection(proto, accept)
+	callFinished = true
+	if !acceptCalled {
+		msg.Meta = MetaUnknownProto
+		return true, nil
+	}
+	return false, nil
+}
+
 // This method is assumed to *only* be called by the goroutine that is
 // processing incoming messages. It is not safe to call concurrently. If you
 // want to do so, fix the parts annotated with !!! below.
@@ -362,13 +421,13 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 	case MetaNone:
 		panic("Passed unmeta message to handleMetaMessage")
 	case MetaNoSuchConnection, MetaConnClosed:
-		conn, ok := c.removeConnection(msg.ConnectionId)
+		conn, ok := c.removeConnection(msg.ConnectionID)
 		if ok {
 			conn.closeNoNotify()
 		}
 		return false, nil
 	case MetaUnknownProto:
-		cid := msg.ConnectionId
+		cid := msg.ConnectionID
 		conn, ok := c.removeConnection(cid)
 
 		if ok {
@@ -378,31 +437,17 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 			// (It's also expected that we'll never get MetaUnknownProto if our
 			// handshake is complete, but the extra protection doesn't hurt)
 			if !conn.isHandshakeComplete() {
-				msg.Data = []byte(ErrStringUnknownProtocol)
+				msg.Data = []byte(errStringUnknownProtocol)
 				conn.putNewMessage(msg)
 			}
 			conn.closeNoNotify()
 		}
 		return false, nil
 	case MetaConnSyn:
-		id := msg.ConnectionId
-		conn := newClientConnection(msg.OtherClient, id, c)
 		proto := string(msgData)
-		ok := c.newConnHandler.IncomingConnection(proto, conn)
-		if !ok {
-			msg.Meta = MetaUnknownProto
-			return true, nil
-		}
-
-		c.connectionsLock.Lock()
-		c.connections[id] = conn
-		c.connectionsLock.Unlock()
-
-		conn.noteHandshakeComplete()
-		msg.Meta = MetaConnAck
-		return true, nil
+		return c.metaHandleSyn(msg, proto)
 	case MetaConnAck:
-		id := msg.ConnectionId
+		id := msg.ConnectionID
 		conn, ok := c.findAnyConnection(id)
 
 		if !ok {
@@ -438,6 +483,9 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 	}
 }
 
+// Close closes a Client's connection to the server, makes Client.Run() exit
+// (eventually), and closes all Connection instances that this Client
+// created.
 func (c *Client) Close() error {
 	err := c.server.Close()
 
@@ -464,7 +512,7 @@ func (c *Client) Close() error {
 // This may be a better design decision, so I'll swap to that in
 // the future.
 func (c *Client) notifyClosed(conn *clientConnection) error {
-	_, ok := c.removeConnection(conn.connId)
+	_, ok := c.removeConnection(conn.connID)
 	if !ok {
 		return nil
 	}
@@ -472,15 +520,18 @@ func (c *Client) notifyClosed(conn *clientConnection) error {
 	closedMsg := &Message{
 		Meta:         MetaConnClosed,
 		OtherClient:  conn.otherClient,
-		ConnectionId: conn.connId,
+		ConnectionID: conn.connID,
 	}
 
 	return c.sendMessage(closedMsg)
 }
 
+// Run is the main "event loop" for a Client. In it, the Client receives
+// messages from the Server and dispatches them to Connections. You should
+// call Authenticate() prior to calling Run().
 func (c *Client) Run() error {
 	if !c.authed {
-		return errors.New(ErrStringNotYetAuthed)
+		return errors.New(errStringNotYetAuthed)
 	}
 
 	defer c.server.Close()
@@ -491,7 +542,7 @@ func (c *Client) Run() error {
 		}
 
 		if msg.Meta == MetaNone {
-			conn, ok := c.findEstablishedConnection(msg.ConnectionId)
+			conn, ok := c.findEstablishedConnection(msg.ConnectionID)
 			if !ok || !conn.putNewMessage(msg) {
 				msg.Data = nil
 				msg.Meta = MetaNoSuchConnection

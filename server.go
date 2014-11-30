@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	ErrStringAuthDenied = "Authentication didn't recognize name+secret pair"
-	ErrStringBadName    = "Client name is invalid"
+	errStringAuthDenied = "Authentication didn't recognize name+secret pair"
+	errStringBadName    = "Client name is invalid"
 )
 
 func isClientNameValid(name string) bool {
@@ -22,6 +22,7 @@ type serverClient struct {
 	name       string
 	server     *Server
 	translator MessageTranslator
+	writeLock  sync.Mutex
 	authed     bool
 }
 
@@ -46,14 +47,14 @@ func (s *serverClient) Authenticate() (name string, err error) {
 
 	name = msg.OtherClient
 	if !isClientNameValid(name) {
-		err = errors.New(ErrStringBadName)
+		err = errors.New(errStringBadName)
 		return
 	}
 
 	secret := msg.Data
 	ok := s.server.auth(name, secret)
 	if !ok {
-		err = errors.New(ErrStringAuthDenied)
+		err = errors.New(errStringAuthDenied)
 		return
 	}
 
@@ -126,13 +127,24 @@ func (s *serverClient) AuthenticateAndRun() error {
 }
 
 func (s *serverClient) WriteMessage(msg *Message) error {
+	s.writeLock.Lock()
+	defer s.writeLock.Unlock()
 	return s.translator.WriteMessage(msg)
 }
 
+// Authenticator is a function that returns whether or not the given name/secret
+// pair is valid, and that the sender of it should be allowed to connect to the
+// server.
+//
+// `secret` may be nil.
 type Authenticator func(name string, secret []byte) bool
+
+// TranslatorMaker is a function that, given a Reader and Writer, returns a
+// MessageTranslator that reads from and writes to the given Reader and Writer.
 type TranslatorMaker func(io.Reader, io.Writer) MessageTranslator
 
-// A server!
+// Server is an implementation of a MessagePassing Server.
+// (Golint made me do this)
 type Server struct {
 	listener io.Closer
 	auth     Authenticator
@@ -151,6 +163,8 @@ type Server struct {
 // for the client closed message to be fully broadcast before the new client
 // can receive connections.
 
+// NewServer creates a new Server instance that uses the given Authenticator
+// and TranslatorMaker
 func NewServer(auth Authenticator, maker TranslatorMaker) *Server {
 	return &Server{
 		translatorMaker: maker,
@@ -280,6 +294,9 @@ func (s *Server) broadcastMessage(m *Message) {
 	}
 }
 
+// Close closes and shuts down the server. It will cause Listen() on the
+// current instance to exit, and will sever the server's connection to all
+// Clients.
 func (s *Server) Close() {
 	s.listener.Close()
 
@@ -294,6 +311,8 @@ func (s *Server) Close() {
 	}
 }
 
+// Listen listens for new Client connections to the Server. When Listen exits,
+// the Server will continue to serve Clients that are already connected.
 func (s *Server) Listen(l net.Listener) error {
 	s.listener = l
 

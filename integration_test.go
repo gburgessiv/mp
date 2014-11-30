@@ -48,9 +48,8 @@ func TestClientsCanCommunicateThroughTheServer(t *testing.T) {
 	// blocking on ourself.
 	c2Chan := make(chan Connection, 1)
 	handler := &callbackConnectionHandler{
-		Callback: func(s string, conn Connection) bool {
-			c2Chan <- conn
-			return true
+		Callback: func(_ string, accept func() Connection) {
+			c2Chan <- accept()
 		},
 	}
 
@@ -76,19 +75,15 @@ func TestClientsCanCommunicateThroughTheServer(t *testing.T) {
 }
 
 func TestNoSuchProtocolReportedProperly(t *testing.T) {
-	handlerCalled := false
 	handler := &callbackConnectionHandler{
-		Callback: func(s string, conn Connection) bool {
-			handlerCalled = false
-			return false
-		},
+		Callback: func(_ string, accept func() Connection) {},
 	}
 
 	server, clients := serverWithClients(handler, "c1", "c2")
 	defer closeServerAndClients(server, clients)
 
 	_, err := clients[0].MakeConnection("c2", "foo")
-	if err == nil || err.Error() != ErrStringUnknownProtocol {
+	if err == nil || err.Error() != errStringUnknownProtocol {
 		t.Fatal(err)
 	}
 }

@@ -90,11 +90,11 @@ func (*nopRWC) Close() error {
 }
 
 type callbackConnectionHandler struct {
-	Callback func(string, Connection) bool
+	Callback func(string, func() Connection)
 }
 
-func (h *callbackConnectionHandler) IncomingConnection(s string, c Connection) bool {
-	return h.Callback(s, c)
+func (h *callbackConnectionHandler) IncomingConnection(s string, c func() Connection) {
+	h.Callback(s, c)
 }
 
 func singletonTranslator(t MessageTranslator) TranslatorMaker {
@@ -127,7 +127,7 @@ func TestClientConnectionWritesMessageDirectlyToClient(t *testing.T) {
 	}
 
 	client := NewClient("test-client", &nopRWC{}, singletonTranslator(&ct), nil)
-	conn := newClientConnection("other-client", "connId", client)
+	conn := newClientConnection("other-client", "connID", client)
 	n, err := conn.Write(msg)
 	if err != nil {
 		t.Error("Write failed:", err)
@@ -154,7 +154,7 @@ func TestClientConnectionOtherClientWorks(t *testing.T) {
 }
 
 func TestClientConnectionIgnoresNilMessagesInRead(t *testing.T) {
-	conn := newClientConnection("other-client", "connId", nil)
+	conn := newClientConnection("other-client", "connID", nil)
 	msg1 := []byte("Hello")
 	msg2 := []byte("World!")
 	syncChan := make(chan struct{})
@@ -192,7 +192,7 @@ func TestClientConnectionIgnoresNilMessagesInRead(t *testing.T) {
 }
 
 func TestClientConnectionSpreadsBigMessagesAcrossManyReads(t *testing.T) {
-	conn := newClientConnection("other-client", "connId", nil)
+	conn := newClientConnection("other-client", "connID", nil)
 	// "Big messages"
 	msg1 := []byte("Hello")
 	go func() {
@@ -227,7 +227,7 @@ func TestClientConnectionSpreadsBigMessagesAcrossManyReads(t *testing.T) {
 }
 
 func TestClientConnectionReturnsOneMessagePerReadMessage(t *testing.T) {
-	conn := newClientConnection("other-client", "connId", nil)
+	conn := newClientConnection("other-client", "connID", nil)
 	msg1 := []byte("Hello")
 	msg2 := []byte{}
 	msg3 := []byte("World!")
@@ -438,7 +438,7 @@ func TestClientSendsNoSuchConnectionOnAckOrRegularMessage(t *testing.T) {
 
 	msg := &Message{
 		Meta:         MetaConnAck,
-		ConnectionId: "does-not-exist",
+		ConnectionID: "does-not-exist",
 		OtherClient:  "no-client",
 		Data:         []byte("Noproto"),
 	}
@@ -462,7 +462,7 @@ func TestClientSendsWatWhenSentAuthMessage(t *testing.T) {
 	defer shutdown()
 
 	msg := &Message{
-		ConnectionId: "does-not-exist",
+		ConnectionID: "does-not-exist",
 		OtherClient:  "no-client",
 		Data:         []byte("Noproto"),
 	}
@@ -485,8 +485,10 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 	)
 
 	ch := &callbackConnectionHandler{
-		Callback: func(proto string, _ Connection) bool {
-			return proto == inputProto
+		Callback: func(proto string, accept func() Connection) {
+			if proto == inputProto {
+				accept()
+			}
 		},
 	}
 
@@ -495,7 +497,7 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 
 	msg := &Message{
 		Meta:         MetaConnSyn,
-		ConnectionId: "test-connid",
+		ConnectionID: "test-connid",
 		OtherClient:  "other",
 		Data:         []byte(inputProto),
 	}
@@ -518,11 +520,10 @@ func TestClientObeysSynHandlerDecisions(t *testing.T) {
 }
 
 func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
-	var clientConn Connection
+	clientConnChan := make(chan Connection, 1)
 	ch := &callbackConnectionHandler{
-		Callback: func(_ string, c Connection) bool {
-			clientConn = c
-			return true
+		Callback: func(_ string, accept func() Connection) {
+			clientConnChan <- accept()
 		},
 	}
 
@@ -531,7 +532,7 @@ func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
 
 	msg := &Message{
 		Meta:         MetaConnSyn,
-		ConnectionId: "test-connid",
+		ConnectionID: "test-connid",
 		OtherClient:  "other",
 		Data:         []byte("test-proto"),
 	}
@@ -542,14 +543,51 @@ func TestClientSendsCloseNotificationOnConnectionClose(t *testing.T) {
 		t.Error("Meta is wrong:", ack.Meta)
 	}
 
-	// clientConn should now be set. We run this in a goroutine because
-	// sendMessage() is done synchronously, and channelTranslator is
-	// synchronous.
+	clientConn := <-clientConnChan
 	go clientConn.Close()
 
 	out := <-ct.outgoing
 	if out.Meta != MetaConnClosed {
 		t.Error("Meta is wrong:", ack.Meta)
+	}
+}
+
+func TestClientAckIsAlwaysSentBeforeFirstMessage(t *testing.T) {
+	respText := []byte("Bye!")
+	ch := &callbackConnectionHandler{
+		Callback: func(_ string, accept func() Connection) {
+			conn := accept()
+			conn.WriteMessage(respText)
+			conn.Close()
+		},
+	}
+
+	_, ct, _, shutdown := makeAuthedClient(t, ch)
+	defer shutdown()
+
+	msg := &Message{
+		Meta:         MetaConnSyn,
+		ConnectionID: "test-connid",
+		OtherClient:  "other",
+		Data:         []byte("test-proto"),
+	}
+
+	ct.incoming <- msg
+	ack := <-ct.outgoing
+	if ack.Meta != MetaConnAck {
+		t.Error("Meta is wrong:", ack.Meta)
+	}
+
+	resp := <-ct.outgoing
+	if resp.Meta != MetaNone {
+		t.Error("Meta is wrong:", resp.Meta)
+	} else if !bytes.Equal(respText, resp.Data) {
+		t.Error("Response text is wrong:", resp.Data)
+	}
+
+	closed := <-ct.outgoing
+	if closed.Meta != MetaConnClosed {
+		t.Error("Meta is wrong:", closed.Meta)
 	}
 }
 
@@ -575,14 +613,14 @@ func TestClientClosesConnectionIfOtherSideClosed(t *testing.T) {
 	}()
 
 	syn := <-ct.outgoing
-	connId := syn.ConnectionId
+	connID := syn.ConnectionID
 
 	syn.Meta = MetaConnAck
 	ct.incoming <- syn
 
 	closedMsg := &Message{
 		Meta:         MetaConnClosed,
-		ConnectionId: connId,
+		ConnectionID: connID,
 		OtherClient:  otherClient,
 	}
 
@@ -647,7 +685,7 @@ func TestClientAuthFailsGracefullyOnCommunicationErrors(t *testing.T) {
 	// Reauth
 	client0, _, _, shutdown := makeAuthedClient(t, nil)
 	err := client0.Authenticate([]byte("Nope.jpg"))
-	if err.Error() != ErrStringMultipleAuths {
+	if err.Error() != errStringMultipleAuths {
 		t.Error("Expected multiple auths error, got", err)
 	}
 	shutdown()
@@ -745,7 +783,7 @@ func TestClientMakeConnectionFailsGracefullyOnWriteFailure(t *testing.T) {
 func TestClientComplainsIfRunWithoutAuthenticating(t *testing.T) {
 	client := NewClient("basically-nil", nil, singletonTranslator(nil), nil)
 	err := client.Run()
-	if err.Error() != ErrStringNotYetAuthed {
+	if err.Error() != errStringNotYetAuthed {
 		t.Error("Expected not yet authed error message, got", err)
 	}
 }

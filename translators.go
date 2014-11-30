@@ -12,6 +12,8 @@ type gobTranslator struct {
 	enc *gob.Encoder
 }
 
+// NewGobTranslator creates a new MessageTranslator that reads/write messages
+// using the Gob message format.
 func NewGobTranslator(r io.Reader, w io.Writer) MessageTranslator {
 	return &gobTranslator{gob.NewDecoder(r), gob.NewEncoder(w)}
 }
@@ -31,7 +33,9 @@ type jsonTranslator struct {
 	enc *json.Encoder
 }
 
-func NewJsonTranslator(r io.Reader, w io.Writer) MessageTranslator {
+// NewJSONTranslator creates a new MessageTranslator that reads/write messages
+// using the JSON message format.
+func NewJSONTranslator(r io.Reader, w io.Writer) MessageTranslator {
 	return &jsonTranslator{json.NewDecoder(r), json.NewEncoder(w)}
 }
 

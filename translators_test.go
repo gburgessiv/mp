@@ -20,13 +20,13 @@ func testTranslator(t *testing.T, maker TranslatorMaker) {
 
 	metas := [...]MetaType{MetaNone, MetaAuthFailure}
 	otherClients := [...]string{"a", "åBc 1 2 3™"}
-	connIds := [...]string{"a:1", otherClients[1] + ":ffffffff"}
+	connIDs := [...]string{"a:1", otherClients[1] + ":ffffffff"}
 	data := [...][]byte{[]byte("Hello, world!"), make([]byte, 1024)}
 	for i := range data[1] {
 		data[1][i] = byte(i % 256)
 	}
 
-	maxLength := len(connIds)
+	maxLength := len(connIDs)
 	datumCopy := make([]byte, 0, 1024*1024)
 	for i := 0; i < maxLength; i++ {
 		datum := data[i%len(data)]
@@ -35,7 +35,7 @@ func testTranslator(t *testing.T, maker TranslatorMaker) {
 		outgoingMessage := &Message{
 			Meta:         metas[i%len(metas)],
 			OtherClient:  otherClients[i%len(otherClients)],
-			ConnectionId: connIds[i%len(connIds)],
+			ConnectionID: connIDs[i%len(connIDs)],
 			Data:         datumCopy,
 		}
 
@@ -76,6 +76,6 @@ func TestGobTranslatorEncodesAndDecodesMessagesProperly(t *testing.T) {
 	testTranslator(t, NewGobTranslator)
 }
 
-func TestJsonTranslatorEncodesAndDecodesMessagesProperly(t *testing.T) {
-	testTranslator(t, NewJsonTranslator)
+func TestJSONTranslatorEncodesAndDecodesMessagesProperly(t *testing.T) {
+	testTranslator(t, NewJSONTranslator)
 }
