@@ -10,15 +10,20 @@ import (
 )
 
 const (
+	unreachableCode = "internal error -- (supposedly) unreachable code was hit"
+)
+
+const (
 	errStringUnknownProtocol = "unknown protocol"
 	errStringMultipleAuths   = "client has already authenticated"
 	errStringNotYetAuthed    = "client not yet authenticated"
 )
 
 type clientConnection struct {
-	closed        chan struct{}
 	isClosed      uint32
 	isEstablished uint32
+
+	closed chan struct{}
 
 	messages       chan []byte
 	currentMessage []byte
@@ -87,6 +92,9 @@ func (c *clientConnection) putNewMessage(msg *Message) bool {
 	case c.messages <- msg.Data:
 		return true
 	}
+
+	// compat with Go 1.0
+	panic(unreachableCode)
 }
 
 func (c *clientConnection) Read(b []byte) (int, error) {
@@ -190,6 +198,8 @@ func (c *clientConnection) OtherClient() string {
 // Client is the entity used to connect to Servers. Using a Client, you can
 // send/receive new Connection requests.
 type Client struct {
+	connNumber uint32
+
 	name        string
 	server      io.ReadWriteCloser
 	serverRLock sync.Mutex
@@ -201,8 +211,7 @@ type Client struct {
 	connections     map[string]*clientConnection
 	connectionsLock sync.Mutex
 
-	connNumber int64
-	authed     bool
+	authed bool
 }
 
 // NewClient creates a new Client instance with the given name + server
@@ -278,8 +287,9 @@ func (c *Client) Authenticate(password []byte) error {
 	return nil
 }
 
-func (c *Client) nextConnID() string {
-	nextInt := atomic.AddInt64(&c.connNumber, 1)
+func (c *Client) nextConnIDNonatomic() string {
+	nextInt := c.connNumber
+	c.connNumber++
 
 	// In personal use, I've never seen a connID exceed 64 bytes,
 	// so there's no point in making extra garbage if it can be
@@ -288,8 +298,29 @@ func (c *Client) nextConnID() string {
 	buf := microoptimization[:0]
 	buf = append(buf, c.name...)
 	buf = append(buf, ':')
-	buf = strconv.AppendInt(buf, nextInt, 16)
+	buf = strconv.AppendInt(buf, int64(nextInt), 16)
 	return string(buf)
+}
+
+func (c *Client) makeAndAddClientConn(otherClient string) (conn *clientConnection, id string) {
+	c.connectionsLock.Lock()
+	defer c.connectionsLock.Unlock()
+
+	// TODO: I don't like doing this much work in a critical section.
+	// but I don't honestly expect MakeConnection to be called often,
+	// and I *definitely* don't expect this for loop to run more than once.
+	for {
+		id = c.nextConnIDNonatomic()
+		// Collision opportunity: If someone forms 2^32 connections over time
+		// (#thingsthatwonthappen) then we might be overwriting an old connection.
+		if _, ok := c.connections[id]; !ok {
+			break
+		}
+	}
+
+	conn = newClientConnection(otherClient, id, c)
+	c.connections[id] = conn
+	return
 }
 
 // MakeConnection attempts to make a Connection with `otherClient` using the
@@ -299,16 +330,7 @@ func (c *Client) nextConnID() string {
 // The Client will need to be authenticated and running when you call
 // MakeConnection().
 func (c *Client) MakeConnection(otherClient, proto string) (Connection, error) {
-	if !c.authed {
-		return nil, errors.New(errStringNotYetAuthed)
-	}
-
-	id := c.nextConnID()
-	conn := newClientConnection(otherClient, id, c)
-
-	c.connectionsLock.Lock()
-	c.connections[id] = conn
-	c.connectionsLock.Unlock()
+	conn, id := c.makeAndAddClientConn(otherClient)
 
 	msg := &Message{
 		Meta:         MetaConnSyn,
@@ -481,6 +503,9 @@ func (c *Client) handleMetaMessage(msg *Message) (resp bool, err error) {
 		s := fmt.Sprintf("Unknown meta message type passed into handleMetaMessage: %d", msg.Meta)
 		return false, errors.New(s)
 	}
+
+	// compat with Go 1.0
+	panic(unreachableCode)
 }
 
 // Close closes a Client's connection to the server, makes Client.Run() exit
@@ -565,4 +590,6 @@ func (c *Client) Run() error {
 			}
 		}
 	}
+	// compat with Go 1.0
+	panic(unreachableCode)
 }

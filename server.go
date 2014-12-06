@@ -97,6 +97,8 @@ func (s *serverClient) Run() error {
 			}
 		}
 	}
+	// Compat with earlier versions of Go
+	return errors.New("Internal error: Run exited prematurely")
 }
 
 func (s *serverClient) AuthenticateAndRun() error {
@@ -204,6 +206,8 @@ func (s *Server) addClient(client *serverClient) bool {
 		s.clientsLock.Unlock()
 		return true
 	}
+	// compat with Go 1.0
+	panic(unreachableCode)
 }
 
 func (s *Server) findClient(name string) (*serverClient, bool) {
@@ -329,4 +333,7 @@ func (s *Server) Listen(l net.Listener) error {
 		nc := newUnauthedServerClient(conn, s, s.translatorMaker(conn, conn))
 		go nc.AuthenticateAndRun()
 	}
+
+	// compat with Go 1.0
+	panic(unreachableCode)
 }

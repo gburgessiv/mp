@@ -62,6 +62,9 @@ func (c *channelTranslator) ReadMessage() (*Message, error) {
 	case <-c.closed:
 		return nil, io.EOF
 	}
+
+	// compat with Go 1.0
+	panic(unreachableCode)
 }
 
 func (c *channelTranslator) WriteMessage(m *Message) error {
@@ -71,6 +74,9 @@ func (c *channelTranslator) WriteMessage(m *Message) error {
 	case <-c.closed:
 		return io.EOF
 	}
+
+	// compat with Go 1.0
+	panic(unreachableCode)
 }
 
 // Because all Client reads/writes go through the MessageTranslator we give it,
