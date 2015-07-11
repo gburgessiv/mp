@@ -184,30 +184,38 @@ func (s *Server) addClient(client *serverClient) bool {
 	// Else, just add it.
 	// Better yet, all of this needs to happen as one single atomic operation. :)
 	name := client.name
+	ok := true
+
+	// Can't defer unlock because the lock needs to be released for running.Close() and
+	// closing.Wait(). If either of those panics, the clientsLock may be Unlocked when it was
+	// already Unlocked.
+	s.clientsLock.Lock()
 	for {
-		s.clientsLock.Lock()
 		if s.closed {
-			return false
+			ok = false
+			break
 		}
 
 		if running, ok := s.clients[name]; ok {
 			s.clientsLock.Unlock()
 			running.Close()
+			s.clientsLock.Lock()
 			continue
 		}
 
 		if closing, ok := s.closingClients[name]; ok {
 			s.clientsLock.Unlock()
 			closing.Wait()
+			s.clientsLock.Lock()
 			continue
 		}
 
 		s.clients[name] = client
-		s.clientsLock.Unlock()
-		return true
+		break
 	}
-	// compat with Go 1.0
-	panic(unreachableCode)
+	s.clientsLock.Unlock()
+
+	return ok
 }
 
 func (s *Server) findClient(name string) (*serverClient, bool) {
